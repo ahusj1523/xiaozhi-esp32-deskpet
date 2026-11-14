@@ -8,10 +8,17 @@
 
 #include <material_symbols.h>
 
+LV_FONT_DECLARE(font_noto_sans_basic_14_1);
+LV_FONT_DECLARE(font_noto_sans_basic_16_4);
+LV_FONT_DECLARE(font_noto_sans_basic_20_4);
+#if CONFIG_LCDWIKI_ES3C28P_LANDSCAPE
+LV_FONT_DECLARE(es3c28p_ui_clock);
+LV_FONT_DECLARE(es3c28p_ui_heading);
+#endif
+
 #if CONFIG_WEATHER_DASHBOARD
 #include "almanac_service.h"
 #include "weather_service.h"
-LV_FONT_DECLARE(lv_font_impact_64);
 #endif
 
 #include <cstdio>
@@ -61,20 +68,20 @@ void StylePanel(lv_obj_t* obj, uint32_t bg, uint32_t border) {
 }
 
 lv_obj_t* Label(lv_obj_t* parent, const char* text, int x, int y, int w, int h,
-                uint32_t color = kText) {
+                uint32_t color = kText, const lv_font_t* font = nullptr) {
     lv_obj_t* label = lv_label_create(parent);
     lv_obj_set_pos(label, x, y);
     lv_obj_set_size(label, w, h);
     lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
+    if (font != nullptr)
+        lv_obj_set_style_text_font(label, font, 0);
     lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
     lv_label_set_text(label, text);
 #if CONFIG_LCDWIKI_ES3C28P_RESOURCE_DIAGNOSTICS
-    // Size must accommodate the *font line height*, not the nominal 14px
-    // size. The existing 14px CJK pack has 16px line height.
-    const auto* font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
-    if (font != nullptr && h < font->line_height) {
-        ESP_LOGW("ES3C28P_UI", "label clipped: text=%s box_h=%d font_h=%d",
-                 text, h, static_cast<int>(font->line_height));
+    const auto* actual_font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+    if (actual_font != nullptr && h < actual_font->line_height) {
+        ESP_LOGW("ES3C28P_UI", "label clipped: text=%s box_h=%d font_h=%d", text, h,
+                 static_cast<int>(actual_font->line_height));
     }
 #endif
     return label;
@@ -190,7 +197,13 @@ void SetIfChanged(lv_obj_t* label, const char* value) {
 }
 }  // namespace
 
-PixelTouchUI::PixelTouchUI(lv_obj_t* screen) {
+PixelTouchUI::PixelTouchUI(lv_obj_t* screen, lv_obj_t* chat_content,
+                           SetRobotCompact set_robot_compact, void* robot_context)
+    : chat_content_(chat_content),
+      set_robot_compact_(set_robot_compact),
+      robot_context_(robot_context) {
+    auto* theme = static_cast<LvglTheme*>(Board::GetInstance().GetDisplay()->GetTheme());
+    RefreshTextFonts(theme->text_font()->font());
     Settings settings("pixel_ui");
     child_mode_ = settings.GetBool("child_mode", true);
     root_ = lv_obj_create(screen);
@@ -217,11 +230,35 @@ PixelTouchUI::PixelTouchUI(lv_obj_t* screen) {
     lv_timer_pause(refresh_timer_);
 }
 
+void PixelTouchUI::RefreshTextFonts(const lv_font_t* text_font, const lv_font_t* muted,
+                                    const lv_font_t* player_title) {
+    muted_font_ = muted ? *muted : font_noto_sans_basic_14_1;
+    muted_font_.fallback = text_font;
+#if CONFIG_LCDWIKI_ES3C28P_LANDSCAPE
+    heading_font_ = es3c28p_ui_heading;
+#else
+    heading_font_ = font_noto_sans_basic_16_4;
+#endif
+    heading_font_.fallback = text_font;
+    player_title_font_ = player_title ? *player_title : font_noto_sans_basic_20_4;
+    player_title_font_.fallback = text_font;
+
+    // Digits and the 月/日 units fit inside the 19px calendar cell.
+    // Preserve the glyph baseline and trim the unused descender space.
+    calendar_digit_font_ = font_noto_sans_basic_16_4;
+    calendar_digit_font_.fallback = text_font;
+    if (calendar_digit_font_.line_height > 19) {
+        calendar_digit_font_.base_line -= calendar_digit_font_.line_height - 19;
+        calendar_digit_font_.line_height = 19;
+    }
+}
+
 PixelTouchUI::~PixelTouchUI() {
     // LVGL queues only the raw this pointer. Cancel callbacks before deletion
     // to avoid use-after-free during screen teardown or reboot.
     lv_async_call_cancel(RunQueuedNavigation, this);
     // The robot is owned by the existing chat display, not by these pages.
+    DetachVoiceMessages();
     DetachRobot();
     if (refresh_timer_ != nullptr) {
         lv_timer_delete(refresh_timer_);
@@ -241,6 +278,8 @@ void PixelTouchUI::Show(lv_obj_t* robot_area, lv_obj_t* chat_container) {
     chat_container_ = chat_container;
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_to_index(root_, lv_obj_get_child_count(lv_obj_get_parent(root_)) - 1);
+    voice_compact_ = false;
+    voice_waiting_response_ = false;
     Navigate(Page::Home);
     lv_timer_resume(refresh_timer_);
 }
@@ -261,8 +300,7 @@ void PixelTouchUI::ShowVoice(lv_obj_t* robot_area, lv_obj_t* chat_container) {
     chat_container_ = chat_container;
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_to_index(root_, lv_obj_get_child_count(lv_obj_get_parent(root_)) - 1);
-    if (page_ != Page::Voice) {
-        voice_waiting_response_ = false; // New conversation, no stale thinking.
+    if (page_ != Page::Voice || robot_slot_ == nullptr) {
         Navigate(Page::Voice);
     }
     RefreshVoice();
@@ -274,7 +312,12 @@ bool PixelTouchUI::IsPlayerVisible() const {
            !lv_obj_has_flag(root_, LV_OBJ_FLAG_HIDDEN);
 }
 
+bool PixelTouchUI::IsVoiceVisible() const {
+    return page_ == Page::Voice && !lv_obj_has_flag(root_, LV_OBJ_FLAG_HIDDEN);
+}
+
 void PixelTouchUI::Hide() {
+    DetachVoiceMessages();
     DetachRobot();
     voice_waiting_response_ = false;
     lv_timer_pause(refresh_timer_);
@@ -286,26 +329,29 @@ void PixelTouchUI::AttachRobot() {
         return;
     }
     lv_obj_set_parent(robot_area_, robot_slot_);
-    // Robot content is 104x124 on both pages; offset it under the 98px voice viewport.
-    lv_obj_set_size(robot_area_, 104, 124);
-    lv_obj_set_pos(robot_area_, page_ == Page::Voice ? -3 : 0, 0);
+    const bool compact = page_ == Page::Voice && voice_compact_;
+    set_robot_compact_(robot_context_, compact);
+    lv_obj_set_size(robot_area_, compact ? 40 : 104, compact ? 40 : 124);
+    lv_obj_set_pos(robot_area_, page_ == Page::Voice && !compact ? -3 : 0, 0);
     // Animate only when visible on the V1.1 pages. Style translation avoids
     // the off-screen layer allocations caused by transform_scale on ESP32.
     auto* robot = lv_obj_get_child(robot_area_, 0);
     if (robot != nullptr) {
         lv_anim_delete(robot, nullptr);
         lv_obj_set_style_translate_y(robot, 0, 0);
-        lv_anim_t float_anim;
-        lv_anim_init(&float_anim);
-        lv_anim_set_var(&float_anim, robot);
-        lv_anim_set_exec_cb(&float_anim, [](void* obj, int32_t y) {
-            lv_obj_set_style_translate_y(static_cast<lv_obj_t*>(obj), y, 0);
-        });
-        lv_anim_set_values(&float_anim, 0, -3);
-        lv_anim_set_duration(&float_anim, 1500);
-        lv_anim_set_playback_duration(&float_anim, 1500);
-        lv_anim_set_repeat_count(&float_anim, LV_ANIM_REPEAT_INFINITE);
-        lv_anim_start(&float_anim);
+        if (!compact) {
+            lv_anim_t float_anim;
+            lv_anim_init(&float_anim);
+            lv_anim_set_var(&float_anim, robot);
+            lv_anim_set_exec_cb(&float_anim, [](void* obj, int32_t y) {
+                lv_obj_set_style_translate_y(static_cast<lv_obj_t*>(obj), y, 0);
+            });
+            lv_anim_set_values(&float_anim, 0, -3);
+            lv_anim_set_duration(&float_anim, 1500);
+            lv_anim_set_playback_duration(&float_anim, 1500);
+            lv_anim_set_repeat_count(&float_anim, LV_ANIM_REPEAT_INFINITE);
+            lv_anim_start(&float_anim);
+        }
         auto* orbit = lv_obj_get_child(robot, 0);
         if (orbit != nullptr) {
             lv_anim_delete(orbit, nullptr);
@@ -340,6 +386,7 @@ void PixelTouchUI::DetachRobot() {
         return;
     }
     if (lv_obj_get_parent(robot_area_) != chat_container_) {
+        set_robot_compact_(robot_context_, false);
         lv_obj_set_parent(robot_area_, chat_container_);
         lv_obj_set_size(robot_area_, 320, 100);
         auto* robot = lv_obj_get_child(robot_area_, 0);
@@ -362,6 +409,7 @@ void PixelTouchUI::DetachRobot() {
 }
 
 void PixelTouchUI::Navigate(Page page) {
+    DetachVoiceMessages();
     DetachRobot();
     lv_obj_clean(body_);
     page_ = page;
@@ -369,6 +417,7 @@ void PixelTouchUI::Navigate(Page page) {
     voice_caption_ = nullptr;
     voice_primary_ = nullptr;
     voice_stop_ = nullptr;
+    voice_messages_ = nullptr;
     home_day_label_ = nullptr;
     home_hint_label_ = nullptr;
     home_network_icon_ = nullptr;
@@ -412,7 +461,7 @@ void PixelTouchUI::Navigate(Page page) {
             break;
         case Page::Voice:
             BuildVoice();
-            AttachRobot();
+            UpdateVoiceLayout();
             break;
         case Page::Calendar:
             BuildCalendar();
@@ -493,7 +542,8 @@ void PixelTouchUI::LogUiGeometry() const {
         log("@talk", robot_slot_);
     } else if (page_ == Page::Voice) {
         log(".header", lv_obj_get_child(body_, 0));
-        log("@voice-face", lv_obj_get_child(body_, 1));
+        log("@voice-face", robot_slot_);
+        log("voice-messages", voice_messages_);
         log("voice-title", voice_title_);
         log("voice-caption", voice_caption_);
         log("voice-cancel", voice_stop_);
@@ -562,14 +612,14 @@ void PixelTouchUI::BuildHeader(const char* title, bool back) {
         lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(button, 0, 0);
     }
-    auto* label = Label(bar, title, back ? 49 : 12, 8, back ? 220 : 290, 20);
+    auto* label = Label(bar, title, back ? 49 : 12, 6, back ? 220 : 290, 25);
     lv_obj_set_style_text_color(label, lv_color_hex(kText), 0);
 }
 
 void PixelTouchUI::BuildHome() {
     // V1.1 browser baseline: no legacy 32px banner; compact date/status row.
-    home_day_label_ = Label(body_, "--月--日 · 星期--", 14, 10, 172, 21, kMuted);
-    home_network_icon_ = Label(body_, "", 226, 8, 19, 20, 0xb2c5d6);
+    home_day_label_ = Label(body_, "--月--日 · 星期--", 14, 10, 195, 21, kMuted, &muted_font_);
+    home_network_icon_ = Label(body_, "", 226, 8, 19, 24, 0xb2c5d6, &muted_font_);
     auto* theme = static_cast<LvglTheme*>(Board::GetInstance().GetDisplay()->GetTheme());
     lv_obj_set_style_text_font(home_network_icon_, theme->icon_font()->font(), 0);
     home_battery_case_ = lv_obj_create(body_);
@@ -593,8 +643,7 @@ void PixelTouchUI::BuildHome() {
     lv_obj_set_style_bg_opa(settings, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(settings, 0, 0);
 
-    // The previously validated robot object is reused, never duplicated.
-    // Its sprite is still awaiting V1.1 round-face visual replacement.
+    // Reuse the same round-face character on the home and voice pages.
     robot_slot_ = lv_obj_create(body_);
     lv_obj_remove_style_all(robot_slot_);
     lv_obj_set_pos(robot_slot_, 200, 51);
@@ -602,12 +651,16 @@ void PixelTouchUI::BuildHome() {
     lv_obj_add_flag(robot_slot_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(robot_slot_, OnTalk, LV_EVENT_CLICKED, this);
 
-    time_label_ = Label(body_, "--:--", 17, 52, 192, 62);
-#if CONFIG_WEATHER_DASHBOARD
-    lv_obj_set_style_text_font(time_label_, &lv_font_impact_64, 0);
+#if CONFIG_LCDWIKI_ES3C28P_LANDSCAPE
+    time_label_ = Label(body_, "--:--", 17, 53, 182, 53, kText, &es3c28p_ui_clock);
+    lv_obj_set_style_text_letter_space(time_label_, -2, 0);
+#else
+    time_label_ = Label(body_, "--:--", 17, 53, 182, 53);
 #endif
-    weather_label_ = Label(body_, "天气暂无数据", 17, 115, 192, 22, kAccent);
-    lunar_label_ = Label(body_, "农历暂无数据", 17, 146, 192, 18, kMuted);
+    weather_label_ = Label(body_, "天气暂无数据", 17, 115, 182, 25, kAccent);
+    lv_label_set_long_mode(weather_label_, LV_LABEL_LONG_DOT);
+    lunar_label_ = Label(body_, "农历暂无数据", 17, 141, 182, 20, kMuted, &muted_font_);
+    lv_label_set_long_mode(lunar_label_, LV_LABEL_LONG_DOT);
 
     auto* indicator = lv_obj_create(body_);
     lv_obj_remove_style_all(indicator);
@@ -617,7 +670,7 @@ void PixelTouchUI::BuildHome() {
     lv_obj_set_style_bg_color(indicator, lv_color_hex(0x70dfcb), 0);
     lv_obj_set_style_bg_opa(indicator, LV_OPA_COVER, 0);
     lv_obj_clear_flag(indicator, LV_OBJ_FLAG_CLICKABLE);
-    home_hint_label_ = Label(body_, "你好，我是天天", 31, 165, 145, 16, kMuted);
+    home_hint_label_ = Label(body_, "你好，我是天天", 31, 163, 165, 20, kMuted, &muted_font_);
 
     auto* story = Button(body_, "听故事", 13, 185, 93, 43, OnStory, this);
     lv_obj_align(lv_obj_get_child(story, 0), LV_ALIGN_LEFT_MID, 30, 0);
@@ -643,10 +696,25 @@ void PixelTouchUI::BuildVoice() {
     lv_obj_add_flag(robot_slot_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(robot_slot_, OnVoicePrimary, LV_EVENT_CLICKED, this);
 
-    voice_title_ = Label(body_, "正在聆听…", 8, 151, 304, 24);
+    auto* header = lv_obj_get_child(body_, 0);
+    auto* media =
+        Button(header, "", 210, 2, 28, 30, OnVoicePlayer, this, MATERIAL_SYMBOLS_MUSIC_NOTE);
+    lv_obj_set_style_bg_opa(media, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(media, 0, 0);
+    auto* assistant = Label(header, "AI 助手", 239, 9, 69, 18, kMuted, &muted_font_);
+    lv_obj_set_style_text_align(assistant, LV_TEXT_ALIGN_RIGHT, 0);
+    voice_title_ = Label(body_, "正在聆听…", 8, 150, 304, 24, kText, &heading_font_);
     lv_obj_set_style_text_align(voice_title_, LV_TEXT_ALIGN_CENTER, 0);
-    voice_caption_ = Label(body_, "我在听，你想聊什么？", 20, 177, 280, 16, kMuted);
+    voice_caption_ = Label(body_, "我在听，你想聊什么？", 20, 175, 280, 18, kMuted, &muted_font_);
     lv_obj_set_style_text_align(voice_caption_, LV_TEXT_ALIGN_CENTER, 0);
+
+    voice_messages_ = lv_obj_create(body_);
+    lv_obj_remove_style_all(voice_messages_);
+    lv_obj_set_pos(voice_messages_, 12, 87);
+    lv_obj_set_size(voice_messages_, 296, 104);
+    lv_obj_remove_flag(voice_messages_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(voice_messages_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(voice_messages_, LV_OBJ_FLAG_HIDDEN);
 
     voice_stop_ = Button(body_, "结束对话", 12, 197, 128, 33, OnVoiceStop, this);
     voice_primary_ = Button(body_, "说话中", 148, 197, 160, 33, OnVoicePrimary, this);
@@ -657,17 +725,89 @@ void PixelTouchUI::BuildVoice() {
     RefreshVoice();
 }
 
+void PixelTouchUI::AttachVoiceMessages() {
+    if (lv_obj_get_parent(chat_content_) == voice_messages_)
+        return;
+    // Let the original flex layout release its computed height before reparenting.
+    lv_obj_set_flex_grow(chat_content_, 0);
+    lv_obj_update_layout(chat_content_);
+    lv_obj_set_parent(chat_content_, voice_messages_);
+    lv_obj_set_pos(chat_content_, 0, 0);
+    lv_obj_set_size(chat_content_, 296, 104);
+    lv_obj_set_scroll_dir(chat_content_, LV_DIR_VER);
+    lv_obj_set_style_pad_all(chat_content_, 1, 0);
+    lv_obj_set_style_pad_right(chat_content_, 5, 0);
+    lv_obj_set_style_pad_row(chat_content_, 7, 0);
+    lv_obj_set_style_bg_color(chat_content_, lv_color_hex(0x42617b), LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(chat_content_, LV_OPA_COVER, LV_PART_SCROLLBAR);
+    lv_obj_set_style_width(chat_content_, 3, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(chat_content_, LV_OPA_TRANSP, 0);
+    lv_obj_remove_flag(chat_content_, LV_OBJ_FLAG_SCROLL_CHAIN);
+    lv_obj_set_scrollbar_mode(chat_content_, LV_SCROLLBAR_MODE_ACTIVE);
+}
+
+void PixelTouchUI::DetachVoiceMessages() {
+    if (voice_messages_ == nullptr || lv_obj_get_parent(chat_content_) != voice_messages_)
+        return;
+    lv_obj_set_parent(chat_content_, chat_container_);
+    lv_obj_set_width(chat_content_, LV_HOR_RES);
+    lv_obj_remove_local_style_prop(chat_content_, LV_STYLE_HEIGHT, 0);
+    lv_obj_set_flex_grow(chat_content_, 1);
+    auto* theme = static_cast<LvglTheme*>(Board::GetInstance().GetDisplay()->GetTheme());
+    lv_obj_set_style_pad_all(chat_content_, theme->spacing(4), 0);
+    lv_obj_set_style_pad_row(chat_content_, theme->spacing(4), 0);
+    lv_obj_set_style_bg_opa(chat_content_, LV_OPA_COVER, 0);
+    lv_obj_remove_local_style_prop(chat_content_, LV_STYLE_BG_COLOR, LV_PART_SCROLLBAR);
+    lv_obj_remove_local_style_prop(chat_content_, LV_STYLE_BG_OPA, LV_PART_SCROLLBAR);
+    lv_obj_remove_local_style_prop(chat_content_, LV_STYLE_WIDTH, LV_PART_SCROLLBAR);
+    lv_obj_add_flag(chat_content_, LV_OBJ_FLAG_SCROLL_CHAIN);
+    lv_obj_set_scrollbar_mode(chat_content_, LV_SCROLLBAR_MODE_OFF);
+}
+
+void PixelTouchUI::UpdateVoiceLayout() {
+    if (voice_compact_) {
+        lv_obj_set_pos(robot_slot_, 12, 42);
+        lv_obj_set_size(robot_slot_, 40, 40);
+        lv_obj_set_pos(voice_title_, 62, 51);
+        lv_obj_set_width(voice_title_, 246);
+        lv_obj_set_style_text_align(voice_title_, LV_TEXT_ALIGN_LEFT, 0);
+        lv_obj_add_flag(voice_caption_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(voice_messages_, LV_OBJ_FLAG_HIDDEN);
+        AttachVoiceMessages();
+        ScrollVoiceToEnd();
+    }
+    AttachRobot();
+}
+
+void PixelTouchUI::ScrollVoiceToEnd() {
+    lv_obj_update_layout(chat_content_);
+    const auto end = lv_obj_get_scroll_y(chat_content_) + lv_obj_get_scroll_bottom(chat_content_);
+    lv_obj_scroll_to_y(chat_content_, std::max<int32_t>(0, end), LV_ANIM_OFF);
+}
+
 void PixelTouchUI::OnChatMessage(const char* role, const char* content) {
     if (role == nullptr || content == nullptr || content[0] == '\0') return;
-    // The real recognized user transcript marks the LLM-response interval.
-    if (std::strcmp(role, "user") == 0) {
-        voice_waiting_response_ = true;
-    } else if (std::strcmp(role, "assistant") == 0) {
-        voice_waiting_response_ = false;
+    const auto state = Application::GetInstance().GetDeviceState();
+    if (state != kDeviceStateListening && state != kDeviceStateSpeaking)
+        return;
+    const bool user = std::strcmp(role, "user") == 0;
+    if (!user && std::strcmp(role, "assistant") != 0)
+        return;
+    voice_waiting_response_ = user;
+    if (!IsVoiceVisible()) {
+        voice_compact_ = true;
+        return;
     }
-    if (page_ == Page::Voice && !lv_obj_has_flag(root_, LV_OBJ_FLAG_HIDDEN)) {
-        RefreshVoice();
+    if (!voice_compact_) {
+        voice_compact_ = true;
+        UpdateVoiceLayout();
+    } else {
+        ScrollVoiceToEnd();
     }
+    RefreshVoice();
+#if CONFIG_LCDWIKI_ES3C28P_RESOURCE_DIAGNOSTICS
+    LogUiGeometry();
+#endif
 }
 
 void PixelTouchUI::RefreshVoice() {
@@ -686,7 +826,7 @@ void PixelTouchUI::RefreshVoice() {
         voice_waiting_response_ = false;
         title = "天天正在回答";
         caption = "点击停止播报";
-        primary = "停止播报";
+        primary = "再问一次";
     } else if (state == kDeviceStateConnecting) {
         voice_waiting_response_ = false;
         title = "正在连接…";
@@ -702,30 +842,31 @@ void PixelTouchUI::RefreshVoice() {
                  state == kDeviceStateSpeaking ? "停止播报" : "结束对话");
     if (enabled) lv_obj_remove_state(voice_primary_, LV_STATE_DISABLED);
     else lv_obj_add_state(voice_primary_, LV_STATE_DISABLED);
+    if (state == kDeviceStateConnecting)
+        lv_obj_add_state(voice_stop_, LV_STATE_DISABLED);
+    else
+        lv_obj_remove_state(voice_stop_, LV_STATE_DISABLED);
 }
 
 void PixelTouchUI::BuildCalendar() {
     BuildHeader("万年历", true);
-    auto* today_button = Button(body_, "今天", 270, 6, 38, 23,
-                                OnCalendarToday, this);
+    auto* today_button = Button(body_, "今天", 260, 4, 48, 27, OnCalendarToday, this);
     lv_obj_set_style_radius(today_button, 6, 0);
     lv_obj_set_style_bg_color(today_button, lv_color_hex(0x263f51), 0);
-    auto* previous = Button(body_, "", 13, 38, 35, 26,
-                            OnCalendarPrevious, this,
+    auto* previous = Button(body_, "", 13, 35, 35, 23, OnCalendarPrevious, this,
                             MATERIAL_SYMBOLS_KEYBOARD_ARROW_LEFT);
-    auto* next = Button(body_, "", 272, 38, 35, 26,
-                        OnCalendarNext, this,
+    auto* next = Button(body_, "", 272, 35, 35, 23, OnCalendarNext, this,
                         MATERIAL_SYMBOLS_KEYBOARD_ARROW_RIGHT);
     for (auto* button : {previous, next}) {
         lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(button, 0, 0);
     }
-    calendar_month_label_ = Label(body_, "", 89, 40, 142, 21);
+    calendar_month_label_ = Label(body_, "", 89, 37, 142, 22, kText, &heading_font_);
     lv_obj_set_style_text_align(calendar_month_label_, LV_TEXT_ALIGN_CENTER, 0);
 
     static constexpr const char* week[] = {"日", "一", "二", "三", "四", "五", "六"};
     for (int col = 0; col < 7; ++col) {
-        auto* label = Label(body_, week[col], 13 + col * 42, 70, 42, 16, 0x718da6);
+        auto* label = Label(body_, week[col], 13 + col * 42, 62, 42, 16, 0xa5b9ce, &muted_font_);
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     }
     std::time_t now = std::time(nullptr);
@@ -745,15 +886,17 @@ void PixelTouchUI::BuildCalendar() {
     const int first = WeekdayOfFirst(calendar_year_, calendar_month_);
     const int days = DaysInMonth(calendar_year_, calendar_month_);
     const bool six_rows = (first + days) > 35;
-    const int row_height = six_rows ? 17 : 20;
+    const int row_height = six_rows ? 19 : 22;
     for (int day = 1; day <= days; ++day) {
         const int index = first + day - 1;
         const int col = index % 7;
         const int row = index / 7;
         auto* cell = lv_label_create(body_);
         calendar_cells_[day] = cell;
-        lv_obj_set_pos(cell, 18 + col * 42, 87 + row * row_height);
-        lv_obj_set_size(cell, 32, six_rows ? 17 : 19);
+        lv_obj_set_pos(cell, 18 + col * 42, 78 + row * row_height);
+        lv_obj_set_size(cell, 32, six_rows ? 19 : 21);
+        lv_obj_set_style_border_post(cell, true, 0);
+        lv_obj_set_style_text_font(cell, &calendar_digit_font_, 0);
         lv_obj_set_style_radius(cell, 8, 0);
         lv_obj_set_style_text_align(cell, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(cell, lv_color_hex(kText), 0);
@@ -779,27 +922,33 @@ void PixelTouchUI::BuildCalendar() {
     }
 
     auto* footer = lv_obj_create(body_);
-    lv_obj_set_pos(footer, 12, 198);
-    lv_obj_set_size(footer, 296, 34);
+    lv_obj_set_pos(footer, 12, 195);
+    lv_obj_set_size(footer, 296, 37);
     StylePanel(footer, 0x1a2d44, 0x2b4660);
     lv_obj_set_style_radius(footer, 9, 0);
     lv_obj_add_flag(footer, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(footer, OnCalendarDetail, LV_EVENT_CLICKED, this);
-    calendar_selected_label_ = Label(footer, "", 11, 0, 180, 16, kText);
-    calendar_lunar_label_ = Label(footer, "农历待查询", 11, 18, 178, 16, 0x94abbf);
-    Label(footer, "查看黄历详情 ›", 195, 8, 92, 19, 0x80dfd2);
+    calendar_selected_label_ = Label(footer, "", 11, 0, 174, 19, kText, &calendar_digit_font_);
+    calendar_lunar_label_ = Label(footer, "农历待查询", 11, 19, 174, 16, 0x94abbf, &muted_font_);
+    lv_label_set_long_mode(calendar_lunar_label_, LV_LABEL_LONG_DOT);
+    Label(footer, "查看黄历详情 >", 182, 8, 104, 19, 0x80dfd2, &muted_font_);
 
     calendar_details_popup_ = lv_obj_create(body_);
     lv_obj_set_pos(calendar_details_popup_, 9, 60);
     lv_obj_set_size(calendar_details_popup_, 302, 173);
     StylePanel(calendar_details_popup_, 0x1b314b, 0x42647a);
     lv_obj_set_style_radius(calendar_details_popup_, 12, 0);
-    calendar_date_label_ = Label(calendar_details_popup_, "", 16, 14, 238, 25, kText);
+    calendar_date_label_ =
+        Label(calendar_details_popup_, "", 16, 12, 238, 24, kText, &heading_font_);
     Button(calendar_details_popup_, "", 258, 12, 26, 25, OnCalendarClose,
            this, MATERIAL_SYMBOLS_CLOSE);
-    calendar_detail_label_ = Label(calendar_details_popup_,
-                                    "点击查询选中日期", 16, 47, 267, 105, kMuted);
+    calendar_detail_label_ =
+        Label(calendar_details_popup_, "点击查询选中日期", 16, 44, 267, 114, kMuted);
     lv_label_set_long_mode(calendar_detail_label_, LV_LABEL_LONG_WRAP);
+    lv_obj_set_height(calendar_detail_label_, LV_SIZE_CONTENT);
+    lv_obj_add_flag(calendar_details_popup_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(calendar_details_popup_, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(calendar_details_popup_, LV_SCROLLBAR_MODE_ACTIVE);
     lv_obj_add_flag(calendar_details_popup_, LV_OBJ_FLAG_HIDDEN);
     RefreshCalendar();
 }
@@ -832,26 +981,27 @@ void PixelTouchUI::BuildPlayer() {
         DrawPrototypeBook(cover, true, 19, 19, 0xe2f2d6);
     }
 
-    player_status_ = Label(body_, "等待播放", 127, 51, 168, 16, 0x83cfc3);
-    player_title_ = Label(body_, "暂无播放内容", 115, 73, 186, 29);
-    Label(body_, "Jellyfin", 115, 108, 164, 16, 0x89a1b8);
+    player_status_ = Label(body_, "等待播放", 127, 52, 168, 18, 0x83cfc3, &muted_font_);
+    player_title_ = Label(body_, "暂无播放内容", 115, 73, 186, 31, kText, &player_title_font_);
+    lv_label_set_long_mode(player_title_, LV_LABEL_LONG_DOT);
+    Label(body_, "Jellyfin", 115, 105, 164, 18, 0x89a1b8, &muted_font_);
 
-    player_seek_slider_ = CompactSlider(body_, 22, 139, 276);
+    player_seek_slider_ = CompactSlider(body_, 22, 132, 276);
     lv_slider_set_range(player_seek_slider_, 0, 1000);
     lv_obj_add_state(player_seek_slider_, LV_STATE_DISABLED);
     lv_obj_add_event_cb(player_seek_slider_, OnMediaSeek, LV_EVENT_RELEASED, this);
 
-    player_position_ = Label(body_, "--:--", 22, 164, 65, 16, 0x8fa7bd);
-    player_duration_ = Label(body_, "--:--", 235, 164, 63, 16, 0x8fa7bd);
+    player_position_ = Label(body_, "--:--", 22, 157, 65, 18, 0x8fa7bd, &muted_font_);
+    player_duration_ = Label(body_, "--:--", 235, 157, 63, 18, 0x8fa7bd, &muted_font_);
     lv_obj_set_style_text_align(player_duration_, LV_TEXT_ALIGN_RIGHT, 0);
 
-    player_prev_button_ = Button(body_, "", 65, 181, 41, 41,
-                                 OnMediaPrev, this, MATERIAL_SYMBOLS_SKIP_PREVIOUS);
-    player_toggle_ = Button(body_, "", 136, 177, 49, 49,
-                            OnMediaToggle, this, MATERIAL_SYMBOLS_PLAY_ARROW);
+    player_prev_button_ =
+        Button(body_, "", 65, 185, 41, 41, OnMediaPrev, this, MATERIAL_SYMBOLS_SKIP_PREVIOUS);
+    player_toggle_ =
+        Button(body_, "", 136, 181, 49, 49, OnMediaToggle, this, MATERIAL_SYMBOLS_PLAY_ARROW);
     lv_obj_add_event_cb(player_toggle_, OnMediaPressed, LV_EVENT_PRESSED, this);
-    player_next_button_ = Button(body_, "", 214, 181, 41, 41,
-                                 OnMediaNext, this, MATERIAL_SYMBOLS_SKIP_NEXT);
+    player_next_button_ =
+        Button(body_, "", 214, 185, 41, 41, OnMediaNext, this, MATERIAL_SYMBOLS_SKIP_NEXT);
     for (auto* button : {player_prev_button_, player_toggle_, player_next_button_}) {
         lv_obj_set_style_radius(button, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_border_width(button, 0, 0);
@@ -872,7 +1022,7 @@ void PixelTouchUI::BuildPlayer() {
     lv_obj_set_size(player_volume_popup_, 220, 47);
     StylePanel(player_volume_popup_, 0x20364d, 0x35556b);
     lv_obj_set_style_radius(player_volume_popup_, 10, 0);
-    Label(player_volume_popup_, "音量", 10, 13, 35, 18, kText);
+    Label(player_volume_popup_, "音量", 10, 13, 35, 18, kText, &muted_font_);
     player_volume_slider_ = CompactSlider(player_volume_popup_, 41, 13, 110);
     lv_slider_set_range(player_volume_slider_, 0, 100);
     lv_obj_add_event_cb(player_volume_slider_, OnSliderChange, LV_EVENT_VALUE_CHANGED, this);
@@ -882,7 +1032,7 @@ void PixelTouchUI::BuildPlayer() {
         initial_volume = codec->output_volume();
     }
     lv_slider_set_value(player_volume_slider_, initial_volume, LV_ANIM_OFF);
-    player_volume_value_ = Label(player_volume_popup_, "", 161, 13, 48, 19, kText);
+    player_volume_value_ = Label(player_volume_popup_, "", 161, 13, 48, 19, kText, &muted_font_);
     char percent[8];
     std::snprintf(percent, sizeof(percent), "%d%%", initial_volume);
     SetIfChanged(player_volume_value_, percent);
@@ -894,16 +1044,17 @@ void PixelTouchUI::BuildPlayer() {
     lv_obj_set_size(playlist_panel_, 300, 201);
     StylePanel(playlist_panel_, 0x1b314b, 0x42647a);
     lv_obj_set_style_radius(playlist_panel_, 12, 0);
-    Label(playlist_panel_, "播放列表", 10, 5, 230, 22, kAccent);
+    Label(playlist_panel_, "播放列表", 10, 4, 230, 25, kAccent);
     Button(playlist_panel_, "", 251, 1, 44, 29, OnPlaylistClose, this,
            MATERIAL_SYMBOLS_CLOSE);
     for (int i = 0; i < 6; ++i) {
         playlist_buttons_[i] = Button(playlist_panel_, "", 8, 29 + i * 23,
                                       284, 23, OnPlaylistSelect, this);
+        lv_obj_set_style_text_font(lv_obj_get_child(playlist_buttons_[i], 0), &muted_font_, 0);
         lv_obj_add_flag(playlist_buttons_[i], LV_OBJ_FLAG_HIDDEN);
     }
     Button(playlist_panel_, "上页", 9, 170, 81, 27, OnPlaylistPrevious, this);
-    playlist_page_label_ = Label(playlist_panel_, "", 108, 173, 91, 24, kMuted);
+    playlist_page_label_ = Label(playlist_panel_, "", 108, 173, 91, 24, kMuted, &muted_font_);
     Button(playlist_panel_, "下页", 210, 170, 81, 27, OnPlaylistNext, this);
     lv_obj_add_flag(playlist_panel_, LV_OBJ_FLAG_HIDDEN);
 }
@@ -957,11 +1108,13 @@ void PixelTouchUI::UpdatePlaylist() {
             continue;
         }
         lv_obj_clear_flag(button, LV_OBJ_FLAG_HIDDEN);
-        // Let the LVGL label clip visually instead of slicing UTF-8 bytes,
-        // which can corrupt a Chinese character mid-sequence.
+        // LVGL wraps/truncates by glyph, keeping UTF-8 intact.
         std::string caption = std::to_string(playlist_offset_ + i + 1) +
                               ". " + playlist_titles_[i];
-        SetIfChanged(lv_obj_get_child(button, 0), caption.c_str());
+        auto* label = lv_obj_get_child(button, 0);
+        lv_obj_set_size(label, 266, 23);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+        SetIfChanged(label, caption.c_str());
         lv_obj_set_user_data(button,
             reinterpret_cast<void*>(static_cast<intptr_t>(playlist_offset_ + i + 1)));
         const bool selected = media_current_index_ == playlist_offset_ + i;
@@ -1064,22 +1217,22 @@ void PixelTouchUI::UpdatePlayer() {
 
 void PixelTouchUI::BuildSettings() {
     BuildHeader("家长设置", true);
-    Label(body_, "本机", 273, 9, 32, 16, 0x829fb7);
+    Label(body_, "本机", 273, 9, 32, 18, 0x829fb7, &muted_font_);
 
-    // V1.1 rows: x=14..306, top=42, each 44px high; no enclosing card.
+    // V1.1 rows: x=14..306, top=39, each 43px high; no enclosing card.
     for (int i = 1; i <= 4; ++i) {
         auto* divider = lv_obj_create(body_);
         lv_obj_remove_style_all(divider);
-        lv_obj_set_pos(divider, 14, 42 + i * 44 - 1);
+        lv_obj_set_pos(divider, 14, 39 + i * 43 - 1);
         lv_obj_set_size(divider, 292, 1);
         lv_obj_set_style_bg_color(divider, lv_color_hex(0x22384e), 0);
         lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, 0);
         lv_obj_clear_flag(divider, LV_OBJ_FLAG_CLICKABLE);
     }
-    Label(body_, "儿童模式", 14, 50, 160, 17);
-    Label(body_, "减少误触和复杂操作", 14, 68, 190, 16, 0x829eb5);
+    Label(body_, "儿童模式", 14, 38, 160, 25);
+    Label(body_, "减少误触和复杂操作", 14, 63, 190, 18, 0x829eb5, &muted_font_);
     child_mode_switch_ = lv_switch_create(body_);
-    lv_obj_set_pos(child_mode_switch_, 271, 54);
+    lv_obj_set_pos(child_mode_switch_, 271, 51);
     lv_obj_set_size(child_mode_switch_, 32, 19);
     lv_obj_set_style_radius(child_mode_switch_, LV_RADIUS_CIRCLE, LV_PART_MAIN);
     lv_obj_set_style_bg_color(child_mode_switch_, lv_color_hex(0x34445a), LV_PART_MAIN);
@@ -1088,14 +1241,14 @@ void PixelTouchUI::BuildSettings() {
     if (child_mode_) lv_obj_add_state(child_mode_switch_, LV_STATE_CHECKED);
     lv_obj_add_event_cb(child_mode_switch_, OnChildModeChanged, LV_EVENT_VALUE_CHANGED, this);
 
-    Label(body_, "屏幕亮度", 14, 96, 150, 20);
-    Label(body_, "默认音量", 14, 140, 150, 20);
-    brightness_slider_ = CompactSlider(body_, 184, 96, 120);
+    Label(body_, "屏幕亮度", 14, 91, 150, 25);
+    Label(body_, "默认音量", 14, 134, 150, 25);
+    brightness_slider_ = CompactSlider(body_, 184, 92, 120);
     lv_slider_set_range(brightness_slider_, 10, 100);
     if (auto* backlight = Board::GetInstance().GetBacklight()) {
         lv_slider_set_value(brightness_slider_, backlight->brightness(), LV_ANIM_OFF);
     }
-    volume_slider_ = CompactSlider(body_, 184, 140, 120);
+    volume_slider_ = CompactSlider(body_, 184, 135, 120);
     lv_slider_set_range(volume_slider_, 0, 100);
     if (auto* codec = Board::GetInstance().GetAudioCodec()) {
         lv_slider_set_value(volume_slider_, codec->output_volume(), LV_ANIM_OFF);
@@ -1104,11 +1257,12 @@ void PixelTouchUI::BuildSettings() {
         lv_obj_add_event_cb(slider, OnSliderChange, LV_EVENT_VALUE_CHANGED, this);
         lv_obj_add_event_cb(slider, OnSliderRelease, LV_EVENT_RELEASED, this);
     }
-    Label(body_, "当前布局", 14, 179, 120, 16);
-    settings_layout_detail_ = Label(body_, "320 × 240 · 横屏", 14, 198, 164, 16, 0x829eb5);
-    Label(body_, "V1.1", 271, 184, 36, 18, 0x8bd7c7);
-    settings_foot_ = Label(body_, child_mode_ ? "儿童模式已开启" : "儿童模式已关闭",
-                           15, 220, 220, 16, 0x829eb5);
+    Label(body_, "当前布局", 14, 167, 120, 25);
+    settings_layout_detail_ =
+        Label(body_, "320 × 240 · 横屏", 14, 192, 164, 18, 0x829eb5, &muted_font_);
+    Label(body_, "V1.1", 271, 182, 36, 18, 0x8bd7c7, &muted_font_);
+    settings_foot_ = Label(body_, child_mode_ ? "儿童模式已开启" : "儿童模式已关闭", 15, 215, 290,
+                           18, 0x829eb5, &muted_font_);
 }
 
 void PixelTouchUI::RefreshHome() {
@@ -1295,7 +1449,6 @@ void PixelTouchUI::Refresh() {
     } else if (++refresh_ticks_ >= 6) {
         refresh_ticks_ = 0;
         if (page_ == Page::Home) RefreshHome();
-        if (page_ == Page::Voice) RefreshVoice();
         if (page_ == Page::Calendar) RefreshCalendar();
     }
 }
@@ -1367,13 +1520,18 @@ void PixelTouchUI::OnVoiceStop(lv_event_t* event) {
     const auto state = Application::GetInstance().GetDeviceState();
     if (state == kDeviceStateListening || state == kDeviceStateSpeaking) {
         Application::GetInstance().ToggleChatState();
-    } else {
+    } else if (state == kDeviceStateIdle) {
         self->QueueNavigate(Page::Home);
     }
 }
+void PixelTouchUI::OnVoicePlayer(lv_event_t* event) {
+    static_cast<PixelTouchUI*>(lv_event_get_user_data(event))->QueueNavigate(Page::Player);
+}
 void PixelTouchUI::OnVoicePrimary(lv_event_t*) {
     const auto state = Application::GetInstance().GetDeviceState();
-    if (state == kDeviceStateIdle || state == kDeviceStateSpeaking) {
+    if (state == kDeviceStateSpeaking) {
+        Application::GetInstance().StartListening();
+    } else if (state == kDeviceStateIdle) {
         Application::GetInstance().ToggleChatState();
     }
 }

@@ -2,7 +2,7 @@
 
 唯一设计依据：`prototypes/esp32-ui/index.html`（320×240 横屏交互原型 V1.1，未经确认不得修改）。
 
-当前原型的正文、按钮、会话气泡和日期数字为 16 px，辅助文字为 14 px，会话状态为 18 px，曲名为 20 px。首页默认显示新版排版，可切换原版 RGB565 首页对照。新版字号和气泡交互待固件适配。
+横屏固件已采用新版字号。正文、按钮、气泡和日期数字为 16 px，辅助文字 14 px，语音状态和日历标题 18 px，曲名 20 px，首页时钟 51 px。资源分区包含对应的中文字体，首次刷此版请同时更新固件和 `generated_assets.bin`。原版 RGB565 首页切换用于网页对照。
 
 - `ui-baseline.json`：Chromium 计算后的 7 个关键状态锚点与 SHA256、12 个 SVG ID、19 个交互动作。
 - `scripts/extract_es3c28p_ui.py --full`：按需导出 13 个状态的完整可见 DOM 节点、计算样式、SVG 和动画；以 HTML 为单一事实来源。
@@ -43,7 +43,7 @@ python scripts/check_es3c28p_ui.py --strict --runtime-tree /tmp/lvgl-ui.json
 | 7°C、阴、西安 | WeatherService 状态，未配置就如实提示 |
 | 模拟农历和黄历宜忌 | AlmanacService 实际缓存和按日期查询 |
 | 固定故事/儿歌、模拟进度和时长 | Go 服务端播放状态，旧版未协商时禁用控制 |
-| 模拟语音提问与固定回答 | 设备 Listening、真实 ASR 文本触发 Thinking、Speaking |
+| 模拟语音提问与固定回答 | 真实 ASR 转写靠右、播报文本靠左。收到第一条消息后缩小机器人，长消息可在独立区域滑动 |
 | 演示电量 / Wi-Fi | Board 实际电池等级及网络状态图标，不支持则隐藏 |
 | HTML CSS 亮度 65–110% | 硬件 PWM 10–100%，硬件不支持超过 100% |
 

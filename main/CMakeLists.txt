@@ -952,18 +952,18 @@ elseif(CONFIG_BOARD_TYPE_WK_ESP32S3_DEV)
     set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_64)
 elseif(CONFIG_BOARD_TYPE_LCDWIKI_ES3C28P)
     set(BOARD_DIR "lcdwiki-es3c28p")
-    # Keep portrait untouched. Only the V1.1 320x240 landscape pages
-    # require the component's existing 14px CJK CBIN for dense rows.
-    if(CONFIG_LCDWIKI_ES3C28P_LANDSCAPE)
-        set(BUILTIN_TEXT_FONT font_noto_sans_basic_14_1)
-    else()
-        set(BUILTIN_TEXT_FONT font_noto_sans_basic_16_4)
-    endif()
+    set(BUILTIN_TEXT_FONT font_noto_sans_basic_16_4)
     set(BUILTIN_ICON_FONT font_material_symbols_20_4)
     set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_64)
     # Ship the resized QWeather icons (<icon_code>.png) in the assets image.
     set(DEFAULT_ASSETS_EXTRA_FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/display/dashboard/weather_icons")
+    if(CONFIG_LCDWIKI_ES3C28P_LANDSCAPE)
+        list(APPEND SOURCES
+            "boards/lcdwiki-es3c28p/fonts/es3c28p_ui_clock.c"
+            "boards/lcdwiki-es3c28p/fonts/es3c28p_ui_heading.c"
+        )
+    endif()
 elseif(CONFIG_BOARD_TYPE_LCDWIKI_ES3C35P)
     set(BOARD_DIR "lcdwiki-es3c35p")
     set(BUILTIN_TEXT_FONT font_noto_sans_basic_20_4)
@@ -1344,6 +1344,22 @@ if(NOTO_FONTS_COMPONENT_PATH)
     set(NOTO_FONTS_PATH "${NOTO_FONTS_COMPONENT_PATH}")
 endif()
 
+if(CONFIG_BOARD_TYPE_LCDWIKI_ES3C28P AND CONFIG_LCDWIKI_ES3C28P_LANDSCAPE)
+    set(ES3C28P_ASSETS_DIR "${CMAKE_CURRENT_BINARY_DIR}/es3c28p_assets")
+    file(GLOB ES3C28P_WEATHER_ICONS CONFIGURE_DEPENDS "${DEFAULT_ASSETS_EXTRA_FILES}/*.png")
+    foreach(ASSET_FILE IN LISTS ES3C28P_WEATHER_ICONS)
+        get_filename_component(ASSET_NAME "${ASSET_FILE}" NAME)
+        configure_file("${ASSET_FILE}" "${ES3C28P_ASSETS_DIR}/${ASSET_NAME}" COPYONLY)
+    endforeach()
+    foreach(FONT_SIZE IN ITEMS 14_1 20_4)
+        set(FONT_FILE "font_noto_sans_common_${FONT_SIZE}.bin")
+        configure_file("${NOTO_FONTS_PATH}/cbin/${FONT_FILE}" "${ES3C28P_ASSETS_DIR}/${FONT_FILE}" COPYONLY)
+        list(APPEND DEFAULT_ASSETS_EXTRA_DEPENDENCIES "${ES3C28P_ASSETS_DIR}/${FONT_FILE}")
+    endforeach()
+    list(APPEND DEFAULT_ASSETS_EXTRA_DEPENDENCIES ${ES3C28P_WEATHER_ICONS})
+    set(DEFAULT_ASSETS_EXTRA_FILES "${ES3C28P_ASSETS_DIR}")
+endif()
+
 if(CONFIG_BOARD_TYPE_ESP_VOCAT OR CONFIG_BOARD_TYPE_CYBERAI_VOCAT_V2_0 OR CONFIG_BOARD_TYPE_CYBERAI_VOCAT_V2_1)
     find_component_by_pattern("esp_emote_assets" EMOTE_ASSETS_COMPONENT EMOTE_ASSETS_PATH)
     if(EMOTE_ASSETS_PATH)
@@ -1465,6 +1481,7 @@ function(build_default_assets_bin)
     # Add default assets extra files if defined
     if(DEFAULT_ASSETS_EXTRA_FILES)
         list(APPEND BUILD_ARGS "--extra_files" "${DEFAULT_ASSETS_EXTRA_FILES}")
+        list(APPEND DEFAULT_ASSETS_DEPENDENCIES ${DEFAULT_ASSETS_EXTRA_DEPENDENCIES})
     endif()
 
     list(APPEND BUILD_ARGS "--esp_sr_model_path" "${ESP_SR_MODEL_PATH}")

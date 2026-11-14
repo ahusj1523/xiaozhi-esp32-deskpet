@@ -9,7 +9,12 @@
 // All calls take place under the existing display/LVGL lock.
 class PixelTouchUI {
 public:
-    explicit PixelTouchUI(lv_obj_t* screen);
+    using SetRobotCompact = void (*)(void*, bool);
+
+    PixelTouchUI(lv_obj_t* screen, lv_obj_t* chat_content, SetRobotCompact set_robot_compact,
+                 void* robot_context);
+    void RefreshTextFonts(const lv_font_t* text_font, const lv_font_t* muted = nullptr,
+                          const lv_font_t* player_title = nullptr);
     ~PixelTouchUI();
 
     void Show(lv_obj_t* robot_area, lv_obj_t* chat_container);
@@ -35,6 +40,11 @@ private:
     void BuildHome();
     void BuildVoice();
     void RefreshVoice();
+    void AttachVoiceMessages();
+    void DetachVoiceMessages();
+    void UpdateVoiceLayout();
+    void ScrollVoiceToEnd();
+    bool IsVoiceVisible() const;
     void BuildCalendar();
     void BuildPlayer();
     void SyncMediaAvailability();
@@ -63,6 +73,7 @@ private:
     static void OnTalk(lv_event_t* event);
     static void OnVoiceStop(lv_event_t* event);
     static void OnVoicePrimary(lv_event_t* event);
+    static void OnVoicePlayer(lv_event_t* event);
     static void OnSliderChange(lv_event_t* event);
     static void OnSliderRelease(lv_event_t* event);
     static void OnMediaPrev(lv_event_t* event);
@@ -90,6 +101,7 @@ private:
     bool player_song_mode_ = false;
     bool player_stop_long_press_ = false;
     bool voice_waiting_response_ = false;
+    bool voice_compact_ = false;
     uint32_t media_generation_ = 0;
     std::string media_status_;
     std::string media_title_;
@@ -115,6 +127,13 @@ private:
     lv_obj_t* robot_area_ = nullptr;
     lv_obj_t* chat_container_ = nullptr;
     lv_obj_t* robot_slot_ = nullptr;
+    lv_obj_t* chat_content_;
+    SetRobotCompact set_robot_compact_;
+    void* robot_context_;
+    lv_font_t muted_font_{};
+    lv_font_t heading_font_{};
+    lv_font_t player_title_font_{};
+    lv_font_t calendar_digit_font_{};
     lv_obj_t* home_day_label_ = nullptr;
     lv_obj_t* home_hint_label_ = nullptr;
     lv_obj_t* home_network_icon_ = nullptr;
@@ -124,6 +143,7 @@ private:
     lv_obj_t* voice_caption_ = nullptr;
     lv_obj_t* voice_primary_ = nullptr;
     lv_obj_t* voice_stop_ = nullptr;
+    lv_obj_t* voice_messages_ = nullptr;
     lv_obj_t* time_label_ = nullptr;
     lv_obj_t* weather_label_ = nullptr;
     lv_obj_t* lunar_label_ = nullptr;

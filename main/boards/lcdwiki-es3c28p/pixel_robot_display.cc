@@ -8,6 +8,7 @@
 
 #include <cstring>
 #include "application.h"
+#include "assets.h"
 #if CONFIG_LCDWIKI_ES3C28P_RESOURCE_DIAGNOSTICS
 
 #include <esp_heap_caps.h>
@@ -18,8 +19,21 @@
 namespace {
 constexpr uint32_t kBackground = 0x071326;
 constexpr uint32_t kText = 0xd4e5e6;
-constexpr uint32_t kUserBubble = 0x28616d;
-constexpr uint32_t kAssistantBubble = 0x1a2c3c;
+constexpr uint32_t kUserBubble = 0x203d48;
+constexpr uint32_t kAssistantBubble = 0x1a2e44;
+
+std::unique_ptr<LvglCBinFont> LoadUiFont(const char* name) {
+    void* data = nullptr;
+    size_t size = 0;
+    if (!Assets::GetInstance().GetAssetData(name, data, size) || size < sizeof(lv_font_t)) {
+        return nullptr;
+    }
+    auto font = std::make_unique<LvglCBinFont>(data);
+    if (font->font() == nullptr) {
+        return nullptr;
+    }
+    return font;
+}
 
 // One existing LVGL line changes its point set; no expression sprites,
 // additional images, canvases or per-frame LVGL object allocations.
@@ -92,7 +106,7 @@ void PixelRobotDisplay::SetupUI() {
     lv_obj_clear_flag(robot, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_center(robot);
 
-    auto* orbit = lv_obj_create(robot);
+    auto* orbit = robot_orbit_ = lv_obj_create(robot);
     lv_obj_remove_style_all(orbit);
     lv_obj_set_pos(orbit, 4, 0);
     lv_obj_set_size(orbit, 96, 96);
@@ -101,7 +115,7 @@ void PixelRobotDisplay::SetupUI() {
     lv_obj_set_style_border_color(orbit, lv_color_hex(0x418b89), 0);
     lv_obj_clear_flag(orbit, LV_OBJ_FLAG_CLICKABLE);
 
-    auto* face = PixelRect(robot, 13, 9, 78, 78, 0x183b59);
+    auto* face = robot_face_ = PixelRect(robot, 13, 9, 78, 78, 0x183b59);
     lv_obj_set_style_radius(face, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_grad_color(face, lv_color_hex(0x356d8f), 0);
     lv_obj_set_style_bg_grad_dir(face, LV_GRAD_DIR_VER, 0);
@@ -130,7 +144,7 @@ void PixelRobotDisplay::SetupUI() {
     lv_obj_set_style_text_color(caption, lv_color_hex(0xa5f2e9), 0);
     lv_obj_set_width(caption, 104);
     lv_obj_set_style_text_align(caption, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(caption, 0, 104);
+    lv_obj_set_pos(caption, 0, 101);
 
     HideDefaultEmotion();
     ApplyChatColors();
@@ -143,11 +157,14 @@ void PixelRobotDisplay::SetupUI() {
             lv_timer_set_period(timer, self->blinking_ ? 100 : 4900);
         },
         4900, this);
-    touch_ui_ = std::make_unique<PixelTouchUI>(lv_screen_active());
+    touch_ui_ = std::make_unique<PixelTouchUI>(
+        lv_screen_active(), content_,
+        [](void* context, bool compact) {
+            static_cast<PixelRobotDisplay*>(context)->SetRobotCompact(compact);
+        },
+        this);
 
-    // During streamed media the app is in 'speaking', not 'idle'.
-    // Keep an entry point on the existing chat surface so the player
-    // remains accessible while the Go server is streaming audio.
+    // Keep a media entry on the fallback chat surface as well as the voice header.
     chat_player_button_ = lv_obj_create(lv_screen_active());
     lv_obj_remove_style_all(chat_player_button_);
     lv_obj_set_pos(chat_player_button_, 273, 32);
@@ -200,45 +217,65 @@ void PixelRobotDisplay::SetEyes(bool closed) {
     ApplyExpression();
 }
 
+void PixelRobotDisplay::SetRobotCompact(bool compact) {
+    if (robot_compact_ == compact)
+        return;
+    robot_compact_ = compact;
+    auto* robot = lv_obj_get_parent(robot_face_);
+    lv_obj_set_size(robot, compact ? 40 : 104, compact ? 40 : 124);
+    lv_obj_set_pos(robot_orbit_, compact ? 0 : 4, 0);
+    lv_obj_set_size(robot_orbit_, compact ? 40 : 96, compact ? 40 : 96);
+    lv_obj_set_pos(robot_face_, compact ? 4 : 13, compact ? 4 : 9);
+    lv_obj_set_size(robot_face_, compact ? 32 : 78, compact ? 32 : 78);
+    for (int i = 0; i < 2; ++i) {
+        if (compact)
+            lv_obj_add_flag(cheeks_[i], LV_OBJ_FLAG_HIDDEN);
+        else
+            lv_obj_remove_flag(cheeks_[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    ApplyExpression();
+}
+
 void PixelRobotDisplay::ApplyExpression() {
     if (eyes_[0] == nullptr || mouth_ == nullptr) return;
     const bool happy = expression_ == RobotExpression::Happy;
     const bool sad = expression_ == RobotExpression::Sad;
     const bool thinking = expression_ == RobotExpression::Thinking;
     const bool speaking = expression_ == RobotExpression::Speaking;
+    const auto position = [this](int point) {
+        return robot_compact_ ? (point * 2 + 2) / 5 : point;
+    };
     for (int i = 0; i < 2; ++i) {
         const int x = i == 0 ? 34 : 61;
         const int height = blinking_ ? 2 : (happy ? 7 : (thinking ? 9 : 13));
         const int y = blinking_ ? 41 : (happy ? 39 : (sad ? 38 : 36));
-        lv_obj_set_pos(eyes_[i], x, y);
-        lv_obj_set_size(eyes_[i], 9, height);
-        if (blinking_ || happy) {
+        lv_obj_set_pos(eyes_[i], position(x) - (robot_compact_ ? 1 : 0), position(y));
+        lv_obj_set_size(eyes_[i], position(9), position(height));
+        if (blinking_ || happy || robot_compact_) {
             lv_obj_add_flag(pupils_[i], LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_remove_flag(pupils_[i], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_pos(pupils_[i], x + (thinking ? 5 : 3),
-                           y + (sad ? 5 : 4));
+            lv_obj_set_pos(pupils_[i], x + (thinking ? 5 : 3), y + (sad ? 5 : 4));
         }
-        if (cheeks_[i] != nullptr) {
-            lv_obj_set_style_bg_opa(cheeks_[i],
-                happy || speaking ? LV_OPA_COVER : LV_OPA_50, 0);
+        lv_obj_set_style_bg_opa(cheeks_[i], happy || speaking ? LV_OPA_COVER : LV_OPA_50, 0);
+    }
+
+    const auto* points = sad        ? kSad
+                         : thinking ? kThinking
+                         : speaking ? kSpeaking
+                         : happy    ? kHappy
+                                    : kSmile;
+    const int count = speaking ? 9 : 5;
+    if (robot_compact_) {
+        for (int i = 0; i < count; ++i) {
+            mouth_points_[i] = {position(points[i].x), position(points[i].y)};
         }
+        points = mouth_points_;
     }
-    if (sad) {
-        lv_line_set_points(mouth_, kSad, 5);
-    } else if (thinking) {
-        lv_line_set_points(mouth_, kThinking, 5);
-    } else if (speaking) {
-        lv_line_set_points(mouth_, kSpeaking, 9);
-    } else if (happy) {
-        lv_line_set_points(mouth_, kHappy, 5);
-    } else {
-        lv_line_set_points(mouth_, kSmile, 5);
-    }
-    lv_obj_set_style_line_color(mouth_,
-        lv_color_hex(sad ? 0x96c1d6 : 0xb0f8f5), 0);
-    lv_obj_set_style_line_width(mouth_, happy ? 4 : 3, 0);
-    lv_obj_set_pos(mouth_, speaking ? 36 : 36, speaking ? 51 : 53);
+    lv_line_set_points(mouth_, points, count);
+    lv_obj_set_style_line_color(mouth_, lv_color_hex(sad ? 0x96c1d6 : 0xb0f8f5), 0);
+    lv_obj_set_style_line_width(mouth_, robot_compact_ ? 2 : (happy ? 4 : 3), 0);
+    lv_obj_set_pos(mouth_, position(36) - (robot_compact_ ? 1 : 0), position(speaking ? 51 : 53));
 }
 
 void PixelRobotDisplay::HideDefaultEmotion() {
@@ -255,7 +292,8 @@ void PixelRobotDisplay::ApplyChatColors() {
     lv_obj_set_style_bg_color(container_, lv_color_hex(kBackground), 0);
     lv_obj_set_style_bg_color(top_bar_, lv_color_hex(kBackground), 0);
     lv_obj_set_style_bg_color(content_, lv_color_hex(kBackground), 0);
-    lv_obj_set_style_bg_opa(content_, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(
+        content_, lv_obj_get_parent(content_) == container_ ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
     for (auto* label :
          {network_label_, status_label_, notification_label_, mute_label_, battery_label_}) {
         if (label != nullptr)
@@ -267,28 +305,63 @@ void PixelRobotDisplay::ApplyChatColors() {
 void PixelRobotDisplay::StyleMessages() {
     if (content_ == nullptr)
         return;
-    for (uint32_t i = 0; i < lv_obj_get_child_cnt(content_); ++i) {
-        lv_obj_t* bubble = lv_obj_get_child(content_, i);
-        const char* role = static_cast<const char*>(lv_obj_get_user_data(bubble));
-        if (role == nullptr && lv_obj_get_child_cnt(bubble) > 0) {
-            bubble = lv_obj_get_child(bubble, 0);
-            role = static_cast<const char*>(lv_obj_get_user_data(bubble));
-        }
-        if (role == nullptr || (strcmp(role, "user") != 0 && strcmp(role, "assistant") != 0 &&
-                                strcmp(role, "system") != 0))
-            continue;
-        lv_obj_set_style_bg_color(
-            bubble, lv_color_hex(strcmp(role, "user") == 0 ? kUserBubble : kAssistantBubble), 0);
-        lv_obj_set_style_bg_opa(bubble, LV_OPA_COVER, 0);
-        if (lv_obj_get_child_cnt(bubble) > 0) {
-            lv_obj_set_style_text_color(lv_obj_get_child(bubble, 0), lv_color_hex(kText), 0);
-        }
+    for (uint32_t i = 0; i < lv_obj_get_child_count(content_); ++i) {
+        StyleMessage(lv_obj_get_child(content_, i));
+    }
+}
+
+void PixelRobotDisplay::StyleMessage(lv_obj_t* row) {
+    if (row == nullptr)
+        return;
+    auto* bubble = row;
+    const char* role = static_cast<const char*>(lv_obj_get_user_data(bubble));
+    if (role == nullptr && lv_obj_get_child_count(row) > 0) {
+        bubble = lv_obj_get_child(row, 0);
+        role = static_cast<const char*>(lv_obj_get_user_data(bubble));
+    }
+    if (role == nullptr || (strcmp(role, "user") != 0 && strcmp(role, "assistant") != 0 &&
+                            strcmp(role, "system") != 0)) {
+        return;
+    }
+    const bool user = strcmp(role, "user") == 0;
+    const bool system = strcmp(role, "system") == 0;
+    lv_obj_set_style_bg_color(bubble, lv_color_hex(user ? kUserBubble : kAssistantBubble), 0);
+    lv_obj_set_style_bg_opa(bubble, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(bubble, lv_color_hex(user ? 0x386669 : 0x2f4962), 0);
+    lv_obj_set_style_border_width(bubble, 1, 0);
+    lv_obj_set_style_radius(bubble, 10, 0);
+    lv_obj_set_style_pad_hor(bubble, 9, 0);
+    lv_obj_set_style_pad_ver(bubble, 6, 0);
+    lv_obj_clear_flag(bubble, LV_OBJ_FLAG_SCROLLABLE);
+    if (row != bubble) {
+        lv_obj_set_width(row, LV_PCT(100));
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_align(bubble, system ? LV_ALIGN_CENTER : LV_ALIGN_RIGHT_MID, 0, 0);
+    }
+    if (auto* label = lv_obj_get_child(bubble, 0)) {
+        // The same list also serves the fallback screen. Keep bubbles inside the
+        // narrowest viewport and let LVGL wrap to the actual content width.
+        lv_obj_set_width(label, LV_SIZE_CONTENT);
+        lv_obj_set_style_max_width(label, 226, 0);
+        lv_obj_set_style_text_color(label, lv_color_hex(user ? 0xbdf7ec : 0xebf4fb), 0);
+        lv_obj_set_width(bubble, LV_SIZE_CONTENT);
     }
 }
 
 void PixelRobotDisplay::SetTheme(Theme* theme) {
-    SpiLcdDisplay::SetTheme(theme);
     DisplayLockGuard lock(this);
+    SpiLcdDisplay::SetTheme(theme);
+    if (touch_ui_ != nullptr) {
+        if (muted_asset_font_ == nullptr) {
+            muted_asset_font_ = LoadUiFont("font_noto_sans_common_14_1.bin");
+        }
+        if (player_title_asset_font_ == nullptr) {
+            player_title_asset_font_ = LoadUiFont("font_noto_sans_common_20_4.bin");
+        }
+        touch_ui_->RefreshTextFonts(
+            theme->GetTextFont()->font(), muted_asset_font_ ? muted_asset_font_->font() : nullptr,
+            player_title_asset_font_ ? player_title_asset_font_->font() : nullptr);
+    }
     if (robot_area_ != nullptr) {
         ApplyChatColors();
         HideDefaultEmotion();
@@ -296,12 +369,16 @@ void PixelRobotDisplay::SetTheme(Theme* theme) {
 }
 
 void PixelRobotDisplay::SetChatMessage(const char* role, const char* content) {
-    SpiLcdDisplay::SetChatMessage(role, content);
+    if (role == nullptr || content == nullptr)
+        return;
     DisplayLockGuard lock(this);
-    StyleMessages();
+    SpiLcdDisplay::SetChatMessage(role, content);
+    if (content_ != nullptr && content[0] != '\0') {
+        StyleMessage(lv_obj_get_child(content_, -1));
+    }
     HideDefaultEmotion();
     if (touch_ui_ != nullptr) touch_ui_->OnChatMessage(role, content);
-    if (role != nullptr && content != nullptr && content[0] != '\0') {
+    if (content[0] != '\0') {
         if (strcmp(role, "user") == 0) expression_ = RobotExpression::Thinking;
         else if (strcmp(role, "assistant") == 0) expression_ = RobotExpression::Speaking;
         ApplyExpression();
@@ -395,11 +472,9 @@ void PixelRobotDisplay::HideDashboard() {
         if (!touch_ui_->IsPlayerVisible()) {
             touch_ui_->ShowVoice(robot_area_, container_);
         }
-        // Keep the existing media entry accessible during audio streaming.
+        // The media shortcut lives in the voice header so it cannot cover the status or bubbles.
         if (chat_player_button_ != nullptr) {
-            lv_obj_clear_flag(chat_player_button_, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_move_to_index(chat_player_button_,
-                                 lv_obj_get_child_count(lv_screen_active()) - 1);
+            lv_obj_add_flag(chat_player_button_, LV_OBJ_FLAG_HIDDEN);
         }
         return;
     }

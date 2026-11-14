@@ -4,6 +4,7 @@
 
 #if CONFIG_LCDWIKI_ES3C28P_LANDSCAPE && CONFIG_USE_WECHAT_MESSAGE_STYLE
 
+#include "display/lvgl_display/lvgl_font.h"
 #include "pixel_touch_ui.h"
 
 class PixelRobotDisplay : public SpiLcdDisplay {
@@ -30,12 +31,20 @@ public:
 private:
     void ApplyChatColors();
     void StyleMessages();
+    void StyleMessage(lv_obj_t* row);
     void HideDefaultEmotion();
     void SetEyes(bool closed);
     void ApplyExpression();
+    void SetRobotCompact(bool compact);
 
+    std::unique_ptr<LvglCBinFont> muted_asset_font_;
+    std::unique_ptr<LvglCBinFont> player_title_asset_font_;
     std::unique_ptr<PixelTouchUI> touch_ui_;
     lv_obj_t* robot_area_ = nullptr;
+    lv_obj_t* robot_face_ = nullptr;
+    lv_obj_t* robot_orbit_ = nullptr;
+    lv_point_precise_t mouth_points_[9]{};
+    bool robot_compact_ = false;
     lv_obj_t* chat_player_button_ = nullptr;
     enum class RobotExpression { Neutral, Happy, Thinking, Sad, Speaking };
     RobotExpression expression_ = RobotExpression::Neutral;
