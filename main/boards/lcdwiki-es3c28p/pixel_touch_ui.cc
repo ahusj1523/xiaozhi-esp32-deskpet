@@ -11,6 +11,7 @@
 LV_FONT_DECLARE(font_noto_sans_basic_16_1);
 LV_FONT_DECLARE(font_noto_sans_basic_16_4);
 LV_FONT_DECLARE(font_noto_sans_basic_20_4);
+LV_FONT_DECLARE(font_material_symbols_30_4);
 #if CONFIG_LCDWIKI_ES3C28P_LANDSCAPE
 LV_FONT_DECLARE(es3c28p_ui_clock);
 LV_FONT_DECLARE(es3c28p_ui_heading);
@@ -615,18 +616,25 @@ void PixelTouchUI::QueueNavigate(Page page) {
 void PixelTouchUI::BuildHeader(const char* title, bool back) {
     // Approved V1.1 header: 320x35, transparent bar and compact back arrow.
     auto* bar = lv_obj_create(body_);
+    lv_obj_remove_style_all(bar);
+    // Size AFTER remove_style_all: the cleanup wipes width/height styles
+    // too, so setting them before left the bar at the theme default
+    // 130x130 and clipped every child past x=130 (title's last glyph,
+    // music button, "AI 助手").
     lv_obj_set_pos(bar, 0, 0);
     lv_obj_set_size(bar, 320, 35);
-    lv_obj_remove_style_all(bar);
     lv_obj_set_style_border_width(bar, 1, 0);
     lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_color(bar, lv_color_hex(0x293b4d), 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
     if (back) {
-        auto* button = Button(bar, "", 12, 2, 28, 30, OnHome, this,
-                              MATERIAL_SYMBOLS_ARROW_BACK);
+        // Full-corner transparent hit area: top-edge taps rolled off the old
+        // 28x30 box. The title label sits above, is not clickable, so taps
+        // fall through to this button; the glyph keeps its exact position.
+        auto* button = Button(bar, "", 12, 0, 48, 35, OnHome, this, MATERIAL_SYMBOLS_ARROW_BACK);
         lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(button, 0, 0);
+        lv_obj_set_style_text_font(lv_obj_get_child(button, 1), &font_material_symbols_30_4, 0);
     }
     auto* label = Label(bar, title, back ? 49 : 12, 6, back ? 220 : 290, 25);
     lv_obj_set_style_text_color(label, lv_color_hex(kText), 0);
@@ -654,10 +662,12 @@ void PixelTouchUI::BuildHome() {
     lv_obj_set_style_bg_opa(home_battery_fill_, LV_OPA_COVER, 0);
     lv_obj_clear_flag(home_battery_fill_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(home_battery_case_, LV_OBJ_FLAG_HIDDEN);
-    auto* settings = Button(body_, "", 279, 6, 28, 28, OnSettings, this,
-                            MATERIAL_SYMBOLS_SETTINGS);
+    // Enlarged transparent hit area (top-edge taps rolled off 28x28);
+    // the glyph keeps its original screen position.
+    auto* settings = Button(body_, "", 279, 0, 41, 35, OnSettings, this, MATERIAL_SYMBOLS_SETTINGS);
     lv_obj_set_style_bg_opa(settings, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(settings, 0, 0);
+    lv_obj_set_style_text_font(lv_obj_get_child(settings, 1), &font_material_symbols_30_4, 0);
 
     // Reuse the same round-face character on the home and voice pages.
     robot_slot_ = lv_obj_create(body_);
@@ -761,6 +771,11 @@ void PixelTouchUI::BuildVoice() {
     lv_obj_set_style_text_align(voice_title_, LV_TEXT_ALIGN_CENTER, 0);
     voice_caption_ = Label(body_, "我在听，你想聊什么？", 20, 176, 280, 18, 0x9ab5ca, &muted_font_);
     lv_obj_set_style_text_align(voice_caption_, LV_TEXT_ALIGN_CENTER, 0);
+    // State text is redundant: the bottom primary button already shows
+    // "正在聆听/说话中" and the robot ring animates. Hiding both labels
+    // frees the whole y150-194 band between the mascot and the actions.
+    lv_obj_add_flag(voice_title_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(voice_caption_, LV_OBJ_FLAG_HIDDEN);
 
     voice_messages_ = lv_obj_create(body_);
     lv_obj_remove_style_all(voice_messages_);
@@ -770,8 +785,10 @@ void PixelTouchUI::BuildVoice() {
     lv_obj_remove_flag(voice_messages_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(voice_messages_, LV_OBJ_FLAG_HIDDEN);
 
-    voice_stop_ = Button(body_, "结束对话", 12, 197, 128, 33, OnVoiceStop, this);
-    voice_primary_ = Button(body_, "说话中", 148, 197, 160, 33, OnVoicePrimary, this);
+    // Taller bottom actions (33->40): a thin strip at the screen edge
+    // misfires on rolled-off releases.
+    voice_stop_ = Button(body_, "结束对话", 12, 197, 128, 40, OnVoiceStop, this);
+    voice_primary_ = Button(body_, "说话中", 148, 197, 160, 40, OnVoicePrimary, this);
     lv_obj_set_style_radius(voice_stop_, 9, 0);
     lv_obj_set_style_radius(voice_primary_, 9, 0);
     lv_obj_set_style_bg_color(voice_stop_, lv_color_hex(0x1a2e44), 0);
@@ -832,6 +849,9 @@ void PixelTouchUI::UpdateVoiceLayout() {
         lv_obj_set_size(voice_title_, 246, 40);
         lv_obj_set_style_pad_top(voice_title_, 11, 0);
         lv_obj_set_style_text_align(voice_title_, LV_TEXT_ALIGN_LEFT, 0);
+        // Compact mode reuses voice_title_ as the status line beside the
+        // small mascot; the full-size stacked pair stays hidden.
+        lv_obj_remove_flag(voice_title_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(voice_caption_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(voice_messages_, LV_OBJ_FLAG_HIDDEN);
         AttachVoiceMessages();
@@ -1097,10 +1117,11 @@ void PixelTouchUI::BuildCalendar() {
 
 void PixelTouchUI::BuildPlayer() {
     BuildHeader(player_song_mode_ ? "儿歌播放" : "故事播放", true);
-    auto* volume_button = Button(body_, "", 280, 2, 28, 30,
-                                 OnVolumePopup, this, MATERIAL_SYMBOLS_VOLUME_UP);
+    auto* volume_button =
+        Button(body_, "", 280, 0, 40, 35, OnVolumePopup, this, MATERIAL_SYMBOLS_VOLUME_UP);
     lv_obj_set_style_border_width(volume_button, 0, 0);
     lv_obj_set_style_bg_opa(volume_button, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_text_font(lv_obj_get_child(volume_button, 1), &font_material_symbols_30_4, 0);
 
     // V1.1 player cover 77x77 at (21,48).
     auto* cover = lv_obj_create(body_);
@@ -1169,6 +1190,10 @@ void PixelTouchUI::BuildPlayer() {
         lv_obj_set_style_radius(button, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_border_width(button, 0, 0);
         lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
+        // Bigger control glyphs, centred in their circular buttons.
+        auto* glyph = lv_obj_get_child(button, 1);
+        lv_obj_set_style_text_font(glyph, &font_material_symbols_30_4, 0);
+        lv_obj_align(glyph, LV_ALIGN_CENTER, 0, 0);
     }
     lv_obj_set_style_bg_color(player_toggle_, lv_color_hex(0x81e4d8), 0);
     lv_obj_set_style_bg_opa(player_toggle_, LV_OPA_COVER, 0);
