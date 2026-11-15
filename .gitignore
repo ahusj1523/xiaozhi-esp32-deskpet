@@ -16,6 +16,7 @@ main/mmap_generate_emoji.h
 .cache
 *.pyc
 *.bin
+!main/boards/lcdwiki-es3c28p/fonts/*.bin
 mmap_generate_*.h
 .clangd
 .acl-recovery/

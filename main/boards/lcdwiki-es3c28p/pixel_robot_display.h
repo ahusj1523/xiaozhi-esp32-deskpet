@@ -39,6 +39,8 @@ private:
 
     std::unique_ptr<LvglCBinFont> muted_asset_font_;
     std::unique_ptr<LvglCBinFont> player_title_asset_font_;
+    std::shared_ptr<LvglCBinFont> theme_font_shared_;
+    bool theme_font_applied_ = false;
     std::unique_ptr<PixelTouchUI> touch_ui_;
     lv_obj_t* robot_area_ = nullptr;
     lv_obj_t* robot_face_ = nullptr;

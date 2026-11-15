@@ -8,7 +8,7 @@
 
 #include <material_symbols.h>
 
-LV_FONT_DECLARE(font_noto_sans_basic_14_1);
+LV_FONT_DECLARE(font_noto_sans_basic_16_1);
 LV_FONT_DECLARE(font_noto_sans_basic_16_4);
 LV_FONT_DECLARE(font_noto_sans_basic_20_4);
 #if CONFIG_LCDWIKI_ES3C28P_LANDSCAPE
@@ -232,7 +232,19 @@ PixelTouchUI::PixelTouchUI(lv_obj_t* screen, lv_obj_t* chat_content,
 
 void PixelTouchUI::RefreshTextFonts(const lv_font_t* text_font, const lv_font_t* muted,
                                     const lv_font_t* player_title) {
-    muted_font_ = muted ? *muted : font_noto_sans_basic_14_1;
+#if CONFIG_LCDWIKI_ES3C28P_LANDSCAPE
+    // Landscape gets the full-coverage asset fonts from PixelRobotDisplay;
+    // fall back to the body font when the assets are not available yet.
+    muted_font_ = muted ? *muted : *text_font;
+    // The asset font's line box (25) exceeds every auxiliary label box that
+    // was laid out for the original rhythm; the ink stays16px either way.
+    if (muted_font_.line_height > 18) {
+        muted_font_.base_line -= muted_font_.line_height - 18;
+        muted_font_.line_height = 18;
+    }
+#else
+    muted_font_ = muted ? *muted : font_noto_sans_basic_16_1;
+#endif
     muted_font_.fallback = text_font;
 #if CONFIG_LCDWIKI_ES3C28P_LANDSCAPE
     heading_font_ = es3c28p_ui_heading;
@@ -240,12 +252,22 @@ void PixelTouchUI::RefreshTextFonts(const lv_font_t* text_font, const lv_font_t*
     heading_font_ = font_noto_sans_basic_16_4;
 #endif
     heading_font_.fallback = text_font;
+#if CONFIG_LCDWIKI_ES3C28P_LANDSCAPE
+    // Static20_4 is dead weight on landscape (the asset font always wins);
+    // keep the static default only for portrait builds.
+    player_title_font_ = player_title ? *player_title : *text_font;
+#else
     player_title_font_ = player_title ? *player_title : font_noto_sans_basic_20_4;
+#endif
     player_title_font_.fallback = text_font;
 
     // Digits and the 月/日 units fit inside the 19px calendar cell.
     // Preserve the glyph baseline and trim the unused descender space.
-    calendar_digit_font_ = font_noto_sans_basic_16_4;
+#if CONFIG_LCDWIKI_ES3C28P_LANDSCAPE
+    calendar_digit_font_ = muted_font_;
+#else
+    calendar_digit_font_ = font_noto_sans_basic_16_1;
+#endif
     calendar_digit_font_.fallback = text_font;
     if (calendar_digit_font_.line_height > 19) {
         calendar_digit_font_.base_line -= calendar_digit_font_.line_height - 19;
@@ -955,7 +977,7 @@ void PixelTouchUI::BuildCalendar() {
 
     static constexpr const char* week[] = {"日", "一", "二", "三", "四", "五", "六"};
     for (int col = 0; col < 7; ++col) {
-        auto* label = Label(body_, week[col], 13 + col * 42, 62, 42, 16, 0xa5b9ce, &muted_font_);
+        auto* label = Label(body_, week[col], 13 + col * 42, 62, 42, 18, 0xa5b9ce, &muted_font_);
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     }
     std::time_t now = std::time(nullptr);
@@ -1018,7 +1040,7 @@ void PixelTouchUI::BuildCalendar() {
     lv_obj_add_flag(footer, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(footer, OnCalendarDetail, LV_EVENT_CLICKED, this);
     calendar_selected_label_ = Label(footer, "", 11, 0, 174, 19, kText, &calendar_digit_font_);
-    calendar_lunar_label_ = Label(footer, "农历待查询", 11, 19, 174, 16, 0x94abbf, &muted_font_);
+    calendar_lunar_label_ = Label(footer, "农历待查询", 11, 19, 174, 18, 0x94abbf, &muted_font_);
     lv_label_set_long_mode(calendar_lunar_label_, LV_LABEL_LONG_DOT);
     Label(footer, "查看黄历详情 >", 182, 8, 104, 19, 0x80dfd2, &muted_font_);
 

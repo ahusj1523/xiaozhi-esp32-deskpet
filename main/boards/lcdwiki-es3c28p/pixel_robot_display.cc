@@ -394,8 +394,18 @@ void PixelRobotDisplay::SetTheme(Theme* theme) {
     DisplayLockGuard lock(this);
     SpiLcdDisplay::SetTheme(theme);
     if (touch_ui_ != nullptr) {
+        if (theme_font_shared_ == nullptr) {
+            theme_font_shared_ =
+                std::shared_ptr<LvglCBinFont>(LoadUiFont("font_noto_sans_common_18_4.bin"));
+        }
+        if (theme_font_shared_ != nullptr && !theme_font_applied_) {
+            // Set before SetTextFont: it re-enters SetTheme on the rebound
+            // styles, and the flag stops the recursion here.
+            theme_font_applied_ = true;
+            SetTextFont(theme_font_shared_);
+        }
         if (muted_asset_font_ == nullptr) {
-            muted_asset_font_ = LoadUiFont("font_noto_sans_common_14_1.bin");
+            muted_asset_font_ = LoadUiFont("font_noto_sans_common_16_4.bin");
         }
         if (player_title_asset_font_ == nullptr) {
             player_title_asset_font_ = LoadUiFont("font_noto_sans_common_20_4.bin");

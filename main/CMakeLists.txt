@@ -952,12 +952,18 @@ elseif(CONFIG_BOARD_TYPE_WK_ESP32S3_DEV)
     set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_64)
 elseif(CONFIG_BOARD_TYPE_LCDWIKI_ES3C28P)
     set(BOARD_DIR "lcdwiki-es3c28p")
-    set(BUILTIN_TEXT_FONT font_noto_sans_basic_16_4)
+    set(BUILTIN_TEXT_FONT font_noto_sans_basic_18_1)
     set(BUILTIN_ICON_FONT font_material_symbols_20_4)
     set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_64)
     # Ship the resized QWeather icons (<icon_code>.png) in the assets image.
     set(DEFAULT_ASSETS_EXTRA_FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/display/dashboard/weather_icons")
+    # Full-charset body/aux fonts (generated from the common Noto set);
+    # the assets partition carries no text_font so the builtin one applies.
+    list(APPEND SOURCES
+        "boards/lcdwiki-es3c28p/fonts/font_noto_sans_basic_18_1.c"
+        "boards/lcdwiki-es3c28p/fonts/font_noto_sans_basic_16_1.c"
+    )
     if(CONFIG_LCDWIKI_ES3C28P_LANDSCAPE)
         list(APPEND SOURCES
             "boards/lcdwiki-es3c28p/fonts/es3c28p_ui_clock.c"
@@ -1351,11 +1357,16 @@ if(CONFIG_BOARD_TYPE_LCDWIKI_ES3C28P AND CONFIG_LCDWIKI_ES3C28P_LANDSCAPE)
         get_filename_component(ASSET_NAME "${ASSET_FILE}" NAME)
         configure_file("${ASSET_FILE}" "${ES3C28P_ASSETS_DIR}/${ASSET_NAME}" COPYONLY)
     endforeach()
-    foreach(FONT_SIZE IN ITEMS 14_1 20_4)
+    foreach(FONT_SIZE IN ITEMS 16_4 20_4)
         set(FONT_FILE "font_noto_sans_common_${FONT_SIZE}.bin")
         configure_file("${NOTO_FONTS_PATH}/cbin/${FONT_FILE}" "${ES3C28P_ASSETS_DIR}/${FONT_FILE}" COPYONLY)
         list(APPEND DEFAULT_ASSETS_EXTRA_DEPENDENCIES "${ES3C28P_ASSETS_DIR}/${FONT_FILE}")
     endforeach()
+    # Full-coverage 18px 4bpp body font (serialized from lv_font_conv output);
+    # loaded as the runtime theme font so body text is antialiased too.
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/boards/lcdwiki-es3c28p/fonts/font_noto_sans_common_18_4.bin"
+                   "${ES3C28P_ASSETS_DIR}/font_noto_sans_common_18_4.bin" COPYONLY)
+    list(APPEND DEFAULT_ASSETS_EXTRA_DEPENDENCIES "${ES3C28P_ASSETS_DIR}/font_noto_sans_common_18_4.bin")
     list(APPEND DEFAULT_ASSETS_EXTRA_DEPENDENCIES ${ES3C28P_WEATHER_ICONS})
     set(DEFAULT_ASSETS_EXTRA_FILES "${ES3C28P_ASSETS_DIR}")
 endif()
