@@ -13,13 +13,14 @@ scope:
     - "320x240 首页、语音、播放器、万年历、设置 V1.1 页面、状态与交互"
     - "HTML 计算样式与 SVG/动画契约，LVGL 运行时几何取证"
     - "保留真实天气、黄历、Jellyfin、旧服务端媒体能力协商"
+    - "首页听故事和听儿歌通过服务端播放对应的 Jellyfin 歌单（原 scope 为 Go 服务端；2026-11-14 经用户确认已移植到 Python 服务端分支 codex/es3c28p-python-media-control）"
   exclude:
     - "修改 main、其他板卡或原 feat/es3c28p-touch-ui 调试分支"
     - "重做 Go 服务端、Jellyfin 音频数据链"
 
 constraints:
   required:
-    - "新版原型适配在 chore/push-workspace-changes 分支工作"
+    - "仅在 feat/es3c28p-interactive-ui-v1.1 分支工作；大字版改动已由 chore/push-workspace-changes 合入"
     - "prototypes/esp32-ui/index.html 为唯一批准设计基线，不得自动改动"
     - "不使用模拟服务端状态、假 ASR 文本和固定播放内容"
     - "失败门禁保留失败；无硬件或渲染证据不宣布 1:1"
@@ -59,12 +60,23 @@ progress:
     - "会话复用真实 ASR/TTS 消息列表，首条消息后缩小机器人并启用独立滚动"
     - "本机 LVGL 验证通过：首页行高、会话列表滚动与切页、六周日历布局、设置页文字边界；严格真机门禁待验收"
     - "首页时钟冒号单独着色、温度使用 20px。语音环随状态呼吸或旋转，气泡按角色缩小一个底角。播放器封面使用径向渐变，黄历以宜忌分行展示真实条目"
+    - "听故事/听儿歌链路已静态复核：hello 协商 media_playlist_start、StartMediaPlaylist 延迟开通道、MQTT 空包绑定 UDP 回程，服务端回包驱动 pending/超时/重试状态机"
+    - "修复启动失败后迟到成功回包不清除失败标记导致播放键误重启；media_playlist_start_supported_ 在断连/复位/重启路径统一清零"
+    - "改动行已用 clang-format 19 格式化；主机测试其余失败均为环境问题（缺编译器、临时目录锁）或分支既有问题（HTML 哈希、config.json 唤醒词），与本改动无关"
+    - "构建环境结论：可用 IDF 在 WSL Ubuntu-24.04 的 ~/esp-idf-pr2179（release/v6.1）；Windows 侧 Espressif-PR2179 为空壳克隆、5.4.1 不合规；以后默认 rsync 覆盖热构建目录 ~/xiaozhi-v11-49c443f-aIEof0 增量构建"
+    - "2026-11-14 三个变体（lcdwiki-es3c28p、-landscape、-landscape-diag）增量编译全部通过，应用分区余 30-31%"
+    - "2026-11-14 21:05 经用户确认先备份后烧录：16MB 完整备份+分区表核对+活动槽确认后，landscape-diag 写入 0x20000 哈希校验通过；串口见 ES3C28P_RES 诊断日志证明新固件运行；功能实测仍待进行"
+    - "2026-11-14 深夜排障：8010 被 digital-human 测试脚本占用致 hello 不可达是点播失败根因；经用户选择把听故事/听儿歌移植到 Python 服务端分支 codex/es3c28p-python-media-control（hello 协商+play_story/play_song+歌单入队），新增 4 测试全过、全套 102 过 8 个环境性失败经 stash 基线对照确认无关；改动未提交，待部署 .87 复测"
+    - "2026-11-15 凌晨：MiMo high risk 英文错误排查完毕——上游以 200 SSE 正文概率性返回拒绝（同载荷回放26过、线上多次拒、51秒内翻转），代码无此串；按用户要求不加兜底掩盖，已部署纯观测日志（LLM_REQUEST_LOG=1+OPENAI_LOG=debug+拒绝告警），查询/复现/关闭方法记入实施记录；待办：观察下次自然复现"
+    - "2026-11-15：播放进度记录+随机播放已实现并部署——playback_store 进度落盘(10秒节流/切歌/暂停/断连,7天+标题匹配续播)、XIAOZHI_PLAYLIST_SHUFFLE 环境变量控乱序(默认关)，按钮与语音双入口；定向24测全过、全套8失败与环境基线一致；冒烟 play_song 1.0s playing 且进度文件实际落盘"
+    - "2026-11-15：chore/push-workspace-changes 4个大字版提交已快进合入本分支（唯一冲突 work-state 已解决），与听故事/听儿歌改动共存；语义复查差异恰为我方11处、门禁与基线一致、WSL 三变体全量重编通过（landscape 余25%含新字体）；改动未提交"
   next:
     - "烧录 lcdwiki-es3c28p-landscape-diag 及生成的资源分区，复测新版字号、会话气泡、文字与滑杆"
     - "真机核对眨眼、开心、难过、思考、说话五种表情，验证 RAM/PSRAM 与动画开销"
     - "补齐未映射的运行时几何 anchor、字体与 SVG 细节；严禁放宽原型契约"
     - "采集真机串口，执行 UI 严格门禁并逐项收敛差异"
     - "验证实际长按/滑动、语音/媒体并发与设备 RAM/PSRAM"
+    - "在 Go 服务端配置故事与儿歌歌单 ID，并验证待机触屏直播、切换分类及旧服务端回退"
 
 decisions:
   - "原型 HTML 不修改，动态数据都来自正式设备或服务"
