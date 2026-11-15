@@ -482,7 +482,9 @@ void PixelRobotDisplay::ShowDashboard() {
     // Preserve existing weather/almanac services; replace only the idle view.
     expression_ = RobotExpression::Neutral;
     ApplyExpression();
-    touch_ui_->Show(robot_area_, container_);
+    if (!touch_ui_->IsPlayerVisible()) {
+        touch_ui_->Show(robot_area_, container_);
+    }
     if (chat_player_button_ != nullptr) {
         lv_obj_add_flag(chat_player_button_, LV_OBJ_FLAG_HIDDEN);
     }

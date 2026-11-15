@@ -51,6 +51,7 @@ private:
     void BuildPlayer();
     void SyncMediaAvailability();
     void UpdatePlayer();
+    void StartPlayerPlaylist();
     void UpdatePlaylist();
     void BuildSettings();
     void BuildHeader(const char* title, bool back = false);
@@ -103,6 +104,9 @@ private:
     Page queued_page_ = Page::Home;
     bool media_available_ = false;
     bool player_song_mode_ = false;
+    bool player_start_pending_ = false;
+    bool player_start_failed_ = false;
+    uint32_t player_start_tick_ = 0;
     bool player_stop_long_press_ = false;
     bool voice_waiting_response_ = false;
     bool voice_compact_ = false;

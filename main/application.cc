@@ -342,6 +342,7 @@ void Application::HandleNetworkConnectedEvent() {
 }
 
 void Application::HandleNetworkDisconnectedEvent() {
+    media_playlist_start_supported_.store(false);
     media_control_state_.store(MediaControlState::kDisconnected);
     // Close current conversation when network disconnected
     auto state = GetDeviceState();
@@ -613,6 +614,7 @@ void Application::InitializeProtocol() {
     });
 
     protocol_->OnAudioChannelClosed([this, &board]() {
+        media_playlist_start_supported_.store(false);
         media_control_state_.store(MediaControlState::kDisconnected);
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         Schedule([this]() {
@@ -1372,6 +1374,7 @@ ListeningMode Application::GetDefaultListeningMode() const {
 
 void Application::Reboot() {
     ESP_LOGI(TAG, "Rebooting...");
+    media_playlist_start_supported_.store(false);
     media_control_state_.store(MediaControlState::kDisconnected);
     if (GetDeviceState() == kDeviceStateNotifying) {
         StopNotification();
@@ -1518,12 +1521,56 @@ void Application::RefreshMediaControlState() {
     const auto state = GetDeviceState();
     if (!startup_completed_ || state == kDeviceStateActivating || state == kDeviceStateStarting ||
         state == kDeviceStateWifiConfiguring || !protocol_ || !protocol_->IsAudioChannelOpened()) {
+        media_playlist_start_supported_.store(false);
         media_control_state_.store(MediaControlState::kDisconnected);
     } else if (!protocol_->SupportsMediaControl()) {
+        media_playlist_start_supported_.store(false);
         media_control_state_.store(MediaControlState::kUnsupported);
     } else {
+        media_playlist_start_supported_.store(protocol_->SupportsMediaPlaylistStart());
         media_control_state_.store(MediaControlState::kAvailable);
     }
+}
+
+void Application::StartMediaPlaylist(bool songs) {
+    Schedule([this, songs]() {
+        if (!startup_completed_ || !protocol_)
+            return;
+        if (!protocol_->IsAudioChannelOpened()) {
+            if (GetDeviceState() != kDeviceStateIdle || !SetDeviceState(kDeviceStateConnecting)) {
+                return;
+            }
+            // Use the same deferred audio handshake as voice, then stay out of listening mode.
+            Schedule([this, songs]() {
+                if (GetDeviceState() != kDeviceStateConnecting)
+                    return;
+                auto& board = Board::GetInstance();
+                board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+                const bool opened = protocol_ && protocol_->OpenAudioChannel();
+                SetDeviceState(kDeviceStateIdle);
+                if (!opened) {
+                    board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+                    return;
+                }
+                StartMediaPlaylist(songs);
+            });
+            return;
+        }
+
+        RefreshMediaControlState();
+        if (!SupportsMediaPlaylistStart())
+            return;
+        if (!protocol_->PrepareMediaPlayback()) {
+            Board::GetInstance().GetDisplay()->SetMediaState("error", "", 0, 0, -1, 0,
+                                                             "音频连接失败");
+            return;
+        }
+        if (GetDeviceState() == kDeviceStateIdle) {
+            // TTS stop returns the device to idle without automatically opening the microphone.
+            listening_mode_ = kListeningModeManualStop;
+        }
+        protocol_->SendMediaControl(songs ? "play_song" : "play_story");
+    });
 }
 
 void Application::SendMediaCommand(const std::string& action, int index, int64_t position_ms) {
@@ -1569,6 +1616,7 @@ void Application::PlaySound(const std::string_view& sound) { audio_service_.Play
 
 void Application::ResetProtocol() {
     Schedule([this]() {
+        media_playlist_start_supported_.store(false);
         media_control_state_.store(MediaControlState::kDisconnected);
         if (GetDeviceState() == kDeviceStateNotifying) {
             StopNotification();

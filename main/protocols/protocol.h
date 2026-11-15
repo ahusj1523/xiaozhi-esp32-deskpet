@@ -62,6 +62,7 @@ public:
     virtual void CloseAudioChannel(bool send_goodbye = true) = 0;
     virtual bool IsAudioChannelOpened() const = 0;
     virtual bool SendAudio(std::unique_ptr<AudioStreamPacket> packet) = 0;
+    virtual bool PrepareMediaPlayback() { return true; }
     virtual void SendWakeWordDetected(const std::string& wake_word);
     virtual void SendStartListening(ListeningMode mode);
     virtual void SendStopListening();
@@ -71,6 +72,7 @@ public:
                           int64_t position_ms = -1);
     // An absent feature in an older server hello means media control is unavailable.
     bool SupportsMediaControl() const { return media_control_supported_.load(); }
+    bool SupportsMediaPlaylistStart() const { return media_playlist_start_supported_.load(); }
 
 protected:
     std::function<void(const cJSON* root)> on_incoming_json_;
@@ -86,8 +88,12 @@ protected:
     bool error_occurred_ = false;
     std::string session_id_;
     std::atomic<bool> media_control_supported_{false};
+    std::atomic<bool> media_playlist_start_supported_{false};
 
-    void ResetServerCapabilities() { media_control_supported_.store(false); }
+    void ResetServerCapabilities() {
+        media_control_supported_.store(false);
+        media_playlist_start_supported_.store(false);
+    }
     void ParseServerCapabilities(const cJSON* hello);
     std::chrono::time_point<std::chrono::steady_clock> last_incoming_time_;
 

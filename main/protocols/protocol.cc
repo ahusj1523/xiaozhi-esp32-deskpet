@@ -108,6 +108,8 @@ void Protocol::SendMcpMessage(const std::string& payload) {
 void Protocol::SendMediaControl(const std::string& action, int index, int64_t position_ms) {
     // Defence in depth for callers outside the touch UI.
     if (!SupportsMediaControl()) return;
+    if ((action == "play_story" || action == "play_song") && !SupportsMediaPlaylistStart())
+        return;
     cJSON* root = cJSON_CreateObject();
     if (root == nullptr) return;
     cJSON_AddStringToObject(root, "type", "media");
@@ -131,8 +133,13 @@ void Protocol::ParseServerCapabilities(const cJSON* hello) {
         ? cJSON_GetObjectItemCaseSensitive(features, "media_control")
         : nullptr;
     const bool supported = cJSON_IsTrue(media);
+    media_playlist_start_supported_.store(
+        supported &&
+        cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(features, "media_playlist_start")));
     media_control_supported_.store(supported);
-    ESP_LOGI(TAG, "Server media control: %s", supported ? "supported" : "unavailable");
+    ESP_LOGI(TAG, "Server media control: %s, playlist start: %s",
+             supported ? "supported" : "unavailable",
+             media_playlist_start_supported_.load() ? "supported" : "unavailable");
 }
 
 bool Protocol::IsTimeout() const {

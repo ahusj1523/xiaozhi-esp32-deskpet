@@ -291,6 +291,8 @@ void PixelTouchUI::ShowPlayer(lv_obj_t* robot_area, lv_obj_t* chat_container) {
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_to_index(root_, lv_obj_get_child_count(lv_obj_get_parent(root_)) - 1);
     Navigate(Page::Player);
+    if (!player_start_pending_)
+        Application::GetInstance().SendMediaCommand("get_state");
     lv_timer_resume(refresh_timer_);
 }
 
@@ -467,10 +469,8 @@ void PixelTouchUI::Navigate(Page page) {
     if (page == Page::Home) RefreshHome();
     if (page == Page::Voice) RefreshVoice();
     if (page == Page::Calendar) RefreshCalendar();
-    if (page == Page::Player) {
+    if (page == Page::Player)
         UpdatePlayer();
-        Application::GetInstance().SendMediaCommand("get_state");
-    }
 #if CONFIG_LCDWIKI_ES3C28P_RESOURCE_DIAGNOSTICS
     LogUiGeometry();
 #endif
@@ -575,7 +575,10 @@ void PixelTouchUI::RunQueuedNavigation(void* data) {
     auto* self = static_cast<PixelTouchUI*>(data);
     if (self->root_ != nullptr &&
         !lv_obj_has_flag(self->root_, LV_OBJ_FLAG_HIDDEN)) {
+        const bool start_playlist = self->queued_page_ == Page::Player;
         self->Navigate(self->queued_page_);
+        if (start_playlist)
+            self->StartPlayerPlaylist();
     }
 }
 
@@ -1204,6 +1207,19 @@ void PixelTouchUI::SetMediaState(const char* state, const char* title,
     SyncMediaAvailability();
     if (!media_available_)
         return;
+    const bool has_error = error != nullptr && *error != '\0';
+    const bool error_state = state != nullptr && strcmp(state, "error") == 0;
+    if (player_start_pending_) {
+        player_start_pending_ = false;
+        player_start_failed_ = has_error || error_state;
+    } else if (error_state) {
+        player_start_failed_ = true;
+    } else if (!has_error) {
+        // A fresh non-error report proves the channel works again and
+        // supersedes an earlier timeout marker; otherwise a late reply
+        // would leave a playing playlist showing a restart button.
+        player_start_failed_ = false;
+    }
     media_status_ = state != nullptr ? state : "";
     media_title_ = title != nullptr ? title : "";
     media_error_ = error != nullptr ? error : "";
@@ -1284,21 +1300,52 @@ void PixelTouchUI::SyncMediaAvailability() {
     media_generation_ = generation;
 }
 
+void PixelTouchUI::StartPlayerPlaylist() {
+    player_start_pending_ = true;
+    player_start_failed_ = false;
+    player_start_tick_ = lv_tick_get();
+    media_error_.clear();
+    if (player_toggle_ != nullptr) {
+        SetIfChanged(lv_obj_get_child(player_toggle_, 1), MATERIAL_SYMBOLS_PLAY_ARROW);
+    }
+    Application::GetInstance().StartMediaPlaylist(player_song_mode_);
+    UpdatePlayer();
+}
+
 void PixelTouchUI::UpdatePlayer() {
     if (player_title_ == nullptr) return;
     SyncMediaAvailability();
-    const auto connection = Application::GetInstance().GetMediaControlState();
+    const auto& app = Application::GetInstance();
+    const auto connection = app.GetMediaControlState();
     const bool supported = connection == MediaControlState::kAvailable;
+    const bool can_start = supported && app.SupportsMediaPlaylistStart();
+    if (player_start_pending_ &&
+        (connection == MediaControlState::kUnsupported || (supported && !can_start) ||
+         lv_tick_elaps(player_start_tick_) >= 30000)) {
+        player_start_pending_ = false;
+        player_start_failed_ = can_start || connection == MediaControlState::kDisconnected;
+        if (can_start) {
+            media_error_ = "加载超时，请重试";
+        }
+    }
     for (auto* control : {player_prev_button_, player_toggle_, player_next_button_}) {
         if (control == nullptr) continue;
-        if (supported) lv_obj_remove_state(control, LV_STATE_DISABLED);
-        else lv_obj_add_state(control, LV_STATE_DISABLED);
+        const bool can_retry = control == player_toggle_ && player_start_failed_ &&
+                               (connection == MediaControlState::kDisconnected || can_start);
+        if (!player_start_pending_ && (supported || can_retry)) {
+            lv_obj_remove_state(control, LV_STATE_DISABLED);
+        } else {
+            lv_obj_add_state(control, LV_STATE_DISABLED);
+        }
     }
-    if (!supported) {
-        SetIfChanged(player_title_, "请先语音播放");
-        SetIfChanged(player_status_, connection == MediaControlState::kDisconnected
-                                       ? "服务未连接"
-                                       : "当前服务不支持触摸控制");
+    if (!supported || player_start_pending_) {
+        SetIfChanged(player_title_, player_start_pending_ ? "正在加载" : "暂无播放内容");
+        const char* status = "当前服务不支持触摸控制";
+        if (player_start_pending_)
+            status = "正在连接播放服务";
+        else if (connection == MediaControlState::kDisconnected)
+            status = "服务未连接，点播放重试";
+        SetIfChanged(player_status_, status);
         SetIfChanged(player_position_, "--:--");
         SetIfChanged(player_duration_, "--:--");
         if (player_seek_slider_ != nullptr) {
@@ -1313,6 +1360,8 @@ void PixelTouchUI::UpdatePlayer() {
     else if (media_status_ == "paused") status = "已暂停";
     else if (media_status_ == "stopped") status = "已停止";
     else if (media_status_ == "error") status = "播放发生错误";
+    if (!can_start && media_title_.empty())
+        status = "请先语音播放";
     SetIfChanged(player_status_, media_error_.empty() ? status : media_error_.c_str());
     const int64_t seconds = media_position_ms_ / 1000;
     char current[32];
@@ -1348,8 +1397,9 @@ void PixelTouchUI::UpdatePlayer() {
     if (player_toggle_ != nullptr) {
         // Button child 0 is text, child 1 is the approved icon glyph.
         SetIfChanged(lv_obj_get_child(player_toggle_, 1),
-                     media_status_ == "playing" ?
-                         MATERIAL_SYMBOLS_PAUSE : MATERIAL_SYMBOLS_PLAY_ARROW);
+                     media_status_ == "playing" && !player_start_failed_
+                         ? MATERIAL_SYMBOLS_PAUSE
+                         : MATERIAL_SYMBOLS_PLAY_ARROW);
     }
 }
 
@@ -1615,7 +1665,9 @@ void PixelTouchUI::Refresh() {
     if (page_ == Page::Player) {
         UpdatePlayer();  // Recheck support on reconnect or server downgrade.
         // Only the new Go server explicitly negotiates this command.
-        if (Application::GetInstance().IsMediaControlAvailable()) {
+        if (!player_start_pending_ &&
+            (!player_start_failed_ || !Application::GetInstance().SupportsMediaPlaylistStart()) &&
+            Application::GetInstance().IsMediaControlAvailable()) {
             Application::GetInstance().SendMediaCommand("get_state");
         }
     } else if (page_ == Page::Calendar && calendar_details_popup_ != nullptr &&
@@ -1746,6 +1798,11 @@ void PixelTouchUI::OnMediaToggle(lv_event_t* event) {
     auto* self = static_cast<PixelTouchUI*>(lv_event_get_user_data(event));
     // LVGL may emit CLICKED after LONG_PRESSED: never follow stop with resume.
     if (self->player_stop_long_press_) return;
+    if (self->player_start_failed_ && (Application::GetInstance().SupportsMediaPlaylistStart() ||
+                                       !Application::GetInstance().IsMediaControlAvailable())) {
+        self->StartPlayerPlaylist();
+        return;
+    }
     Application::GetInstance().SendMediaCommand(
         self->media_status_ == "playing" ? "pause" : "resume");
 }
@@ -1818,7 +1875,8 @@ void PixelTouchUI::OnChildModeChanged(lv_event_t* event) {
 
 void PixelTouchUI::OnPlaylistOpen(lv_event_t* event) {
     auto* self = static_cast<PixelTouchUI*>(lv_event_get_user_data(event));
-    if (self->playlist_panel_ == nullptr) return;
+    if (self->playlist_panel_ == nullptr || self->player_start_pending_)
+        return;
     self->playlist_offset_ = 0;
     self->playlist_count_ = 0;
     self->UpdatePlaylist();

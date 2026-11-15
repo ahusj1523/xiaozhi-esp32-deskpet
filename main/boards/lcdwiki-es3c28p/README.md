@@ -140,9 +140,10 @@ python scripts/build.py lcdwiki-es3c28p --name lcdwiki-es3c28p
 
 ## 新旧服务端兼容（媒体能力协商）
 
-固件与服务端使用已有 `hello.features.media_control` 做一次握手协商，不新增探测连接或后台任务：
+固件与服务端在音频会话的 hello 中协商媒体能力：
 
 - **新 Go 服务端**：握手响应显式返回 `"features":{"media_control":true}`，固件才允许从触摸播放器发送 `media` 类型的状态查询、列表与控制命令
+- **触屏直接播放**：服务端同时声明 `media_playlist_start: true` 时，从首页点「听故事」或「听儿歌」会连接音频会话，并按 Jellyfin 歌单顺序从第一项开始播放。Go 服务进程通过 `XIAOZHI_STORY_PLAYLIST_ID` 和 `XIAOZHI_SONG_PLAYLIST_ID` 分别绑定两个 Jellyfin 歌单，使用已配置的 `jellyfin_audio` MCP 工具。
 - **旧版 Go/Python 服务端**：握手缺少字段、字段为 `false`、或握手失败时，一律视为不支持，**不再向服务端发送任何 `media` 命令**，避免旧服务端每 5 秒打印未知消息错误
 - 不支持时，触摸播放器显示“服务端未声明触摸播放控制”，播放/切歌/列表/Seek 按钮禁用；传统语音对话和服务端已有 Jellyfin 语音播放能力不受影响
 - WebSocket/MQTT 的 hello 都支持；断开、关闭音频通道、重连后自动重新协商，页面每 5 秒刷新可用状态，无需手动切换配置

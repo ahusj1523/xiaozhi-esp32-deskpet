@@ -202,6 +202,11 @@ bool MqttProtocol::SendText(const std::string& text) {
     return true;
 }
 
+bool MqttProtocol::PrepareMediaPlayback() {
+    // Bind the UDP return path without recording or sending microphone audio.
+    return SendAudio(std::make_unique<AudioStreamPacket>());
+}
+
 bool MqttProtocol::SendAudio(std::unique_ptr<AudioStreamPacket> packet) {
     constexpr size_t kAudioHeaderSize = 16;
 
@@ -236,9 +241,10 @@ bool MqttProtocol::SendAudio(std::unique_ptr<AudioStreamPacket> packet) {
     encrypted.resize(aes_nonce_.size() + packet->payload.size());
     memcpy(encrypted.data(), nonce.data(), nonce.size());
 
-    if (!CryptAesCtr(reinterpret_cast<const uint8_t*>(packet->payload.data()),
+    if (!packet->payload.empty() &&
+        !CryptAesCtr(reinterpret_cast<const uint8_t*>(packet->payload.data()),
                      packet->payload.size(), reinterpret_cast<const uint8_t*>(nonce.data()),
-                     reinterpret_cast<uint8_t*>(&encrypted[nonce.size()]))) {
+                     reinterpret_cast<uint8_t*>(&encrypted[kAudioHeaderSize]))) {
         ESP_LOGE(TAG, "Failed to encrypt audio data");
         return false;
     }
