@@ -1441,7 +1441,7 @@ void PixelTouchUI::RefreshHome() {
         const auto* font = lv_obj_get_style_text_font(temperature_label_, LV_PART_MAIN);
         lv_point_t text_size;
         lv_text_get_size(&text_size, output, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-        const auto offset = std::min(text_size.x + 6, 191);
+        const auto offset = std::min<int32_t>(text_size.x + 6, 191);
         lv_obj_set_x(weather_label_, 17 + offset);
         lv_obj_set_width(weather_label_, 192 - offset);
         std::string description = weather.city;
