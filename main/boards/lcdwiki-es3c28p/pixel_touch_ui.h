@@ -31,6 +31,7 @@ public:
 
 private:
     enum class Page { Home, Voice, Calendar, Player, Settings };
+    enum class VoiceRing { Listening, Thinking, Speaking };
 
     void Navigate(Page page);
     void QueueNavigate(Page page);
@@ -40,6 +41,7 @@ private:
     void BuildHome();
     void BuildVoice();
     void RefreshVoice();
+    void UpdateVoiceRing(VoiceRing state);
     void AttachVoiceMessages();
     void DetachVoiceMessages();
     void UpdateVoiceLayout();
@@ -54,6 +56,8 @@ private:
     void BuildHeader(const char* title, bool back = false);
     void RefreshHome();
     void RefreshCalendar();
+    void UpdateCalendarDetails(const char* lunar, const char* yi = nullptr,
+                               const char* ji = nullptr);
     void UpdateCalendarSelection();
     void ResetCalendarToday();
     void NavigateCalendarMonth(int delta);
@@ -102,6 +106,8 @@ private:
     bool player_stop_long_press_ = false;
     bool voice_waiting_response_ = false;
     bool voice_compact_ = false;
+    VoiceRing voice_ring_state_ = VoiceRing::Listening;
+    int32_t voice_ring_angle_ = 0;
     uint32_t media_generation_ = 0;
     std::string media_status_;
     std::string media_title_;
@@ -139,16 +145,20 @@ private:
     lv_obj_t* home_network_icon_ = nullptr;
     lv_obj_t* home_battery_case_ = nullptr;
     lv_obj_t* home_battery_fill_ = nullptr;
+    lv_obj_t* voice_ring_ = nullptr;
     lv_obj_t* voice_title_ = nullptr;
     lv_obj_t* voice_caption_ = nullptr;
     lv_obj_t* voice_primary_ = nullptr;
     lv_obj_t* voice_stop_ = nullptr;
     lv_obj_t* voice_messages_ = nullptr;
     lv_obj_t* time_label_ = nullptr;
+    lv_obj_t* temperature_label_ = nullptr;
     lv_obj_t* weather_label_ = nullptr;
     lv_obj_t* lunar_label_ = nullptr;
     lv_obj_t* calendar_date_label_ = nullptr;
     lv_obj_t* calendar_detail_label_ = nullptr;
+    lv_obj_t* calendar_yi_row_ = nullptr;
+    lv_obj_t* calendar_ji_row_ = nullptr;
     lv_obj_t* calendar_month_label_ = nullptr;
     lv_obj_t* calendar_selected_label_ = nullptr;
     lv_obj_t* calendar_lunar_label_ = nullptr;

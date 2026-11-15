@@ -6,6 +6,7 @@
 
 #if CONFIG_LCDWIKI_ES3C28P_LANDSCAPE && CONFIG_USE_WECHAT_MESSAGE_STYLE
 
+#include <algorithm>
 #include <cstring>
 #include "application.h"
 #include "assets.h"
@@ -21,6 +22,40 @@ constexpr uint32_t kBackground = 0x071326;
 constexpr uint32_t kText = 0xd4e5e6;
 constexpr uint32_t kUserBubble = 0x203d48;
 constexpr uint32_t kAssistantBubble = 0x1a2e44;
+
+void DrawChatBubble(lv_event_t* event) {
+    auto* bubble = lv_event_get_target_obj(event);
+    auto* layer = lv_event_get_layer(event);
+    const bool user = lv_event_get_user_data(event) != nullptr;
+    lv_area_t bounds;
+    lv_obj_get_coords(bubble, &bounds);
+    const auto clip = layer->_clip_area;
+
+    lv_draw_rect_dsc_t rect;
+    lv_draw_rect_dsc_init(&rect);
+    rect.base.obj = bubble;
+    rect.bg_color = lv_obj_get_style_bg_color(bubble, LV_PART_MAIN);
+    rect.border_color = lv_obj_get_style_border_color(bubble, LV_PART_MAIN);
+    rect.border_width = 1;
+
+    // Draw the same rectangle in non-overlapping clips so the small corner
+    // shares the exact fill and border with the rest of the LVGL bubble.
+    const auto draw = [&](const lv_area_t& region, int radius) {
+        layer->_clip_area = {std::max(clip.x1, region.x1), std::max(clip.y1, region.y1),
+                             std::min(clip.x2, region.x2), std::min(clip.y2, region.y2)};
+        if (layer->_clip_area.x1 <= layer->_clip_area.x2 &&
+            layer->_clip_area.y1 <= layer->_clip_area.y2) {
+            rect.radius = radius;
+            lv_draw_rect(layer, &rect, &bounds);
+        }
+    };
+    const int32_t middle_x = bounds.x1 + lv_area_get_width(&bounds) / 2;
+    const int32_t lower_y = bounds.y1 + lv_area_get_height(&bounds) / 2;
+    draw({bounds.x1, bounds.y1, bounds.x2, lower_y - 1}, 10);
+    draw({bounds.x1, lower_y, middle_x - 1, bounds.y2}, user ? 10 : 3);
+    draw({middle_x, lower_y, bounds.x2, bounds.y2}, user ? 3 : 10);
+    layer->_clip_area = clip;
+}
 
 std::unique_ptr<LvglCBinFont> LoadUiFont(const char* name) {
     void* data = nullptr;
@@ -326,10 +361,17 @@ void PixelRobotDisplay::StyleMessage(lv_obj_t* row) {
     const bool user = strcmp(role, "user") == 0;
     const bool system = strcmp(role, "system") == 0;
     lv_obj_set_style_bg_color(bubble, lv_color_hex(user ? kUserBubble : kAssistantBubble), 0);
-    lv_obj_set_style_bg_opa(bubble, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(bubble, system ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_color(bubble, lv_color_hex(user ? 0x386669 : 0x2f4962), 0);
     lv_obj_set_style_border_width(bubble, 1, 0);
     lv_obj_set_style_radius(bubble, 10, 0);
+    if (!system) {
+        // The first style pass installs the painter. A theme refresh reuses it.
+        if (lv_obj_get_style_border_opa(bubble, LV_PART_MAIN) != LV_OPA_TRANSP) {
+            lv_obj_add_event_cb(bubble, DrawChatBubble, LV_EVENT_DRAW_MAIN, user ? row : nullptr);
+        }
+        lv_obj_set_style_border_opa(bubble, LV_OPA_TRANSP, 0);
+    }
     lv_obj_set_style_pad_hor(bubble, 9, 0);
     lv_obj_set_style_pad_ver(bubble, 6, 0);
     lv_obj_clear_flag(bubble, LV_OBJ_FLAG_SCROLLABLE);

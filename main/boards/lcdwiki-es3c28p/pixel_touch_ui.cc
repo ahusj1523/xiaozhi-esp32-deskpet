@@ -317,6 +317,8 @@ bool PixelTouchUI::IsVoiceVisible() const {
 }
 
 void PixelTouchUI::Hide() {
+    if (voice_ring_ != nullptr)
+        lv_anim_delete(voice_ring_, nullptr);
     DetachVoiceMessages();
     DetachRobot();
     voice_waiting_response_ = false;
@@ -339,7 +341,7 @@ void PixelTouchUI::AttachRobot() {
     if (robot != nullptr) {
         lv_anim_delete(robot, nullptr);
         lv_obj_set_style_translate_y(robot, 0, 0);
-        if (!compact) {
+        if (page_ == Page::Home) {
             lv_anim_t float_anim;
             lv_anim_init(&float_anim);
             lv_anim_set_var(&float_anim, robot);
@@ -352,25 +354,11 @@ void PixelTouchUI::AttachRobot() {
             lv_anim_set_repeat_count(&float_anim, LV_ANIM_REPEAT_INFINITE);
             lv_anim_start(&float_anim);
         }
-        auto* orbit = lv_obj_get_child(robot, 0);
-        if (orbit != nullptr) {
-            lv_anim_delete(orbit, nullptr);
-            if (page_ == Page::Voice) {
-                lv_anim_t pulse;
-                lv_anim_init(&pulse);
-                lv_anim_set_var(&pulse, orbit);
-                lv_anim_set_exec_cb(&pulse, [](void* obj, int32_t opacity) {
-                    lv_obj_set_style_opa(static_cast<lv_obj_t*>(obj),
-                                         static_cast<lv_opa_t>(opacity), 0);
-                });
-                lv_anim_set_values(&pulse, 150, 255);
-                lv_anim_set_duration(&pulse, 825);
-                lv_anim_set_playback_duration(&pulse, 825);
-                lv_anim_set_repeat_count(&pulse, LV_ANIM_REPEAT_INFINITE);
-                lv_anim_start(&pulse);
-            } else {
-                lv_obj_set_style_opa(orbit, LV_OPA_COVER, 0);
-            }
+        if (auto* orbit = lv_obj_get_child(robot, 0)) {
+            if (page_ == Page::Voice)
+                lv_obj_add_flag(orbit, LV_OBJ_FLAG_HIDDEN);
+            else
+                lv_obj_remove_flag(orbit, LV_OBJ_FLAG_HIDDEN);
         }
     }
     // The single shared character includes a home-only caption.
@@ -395,8 +383,7 @@ void PixelTouchUI::DetachRobot() {
             lv_obj_set_style_translate_y(robot, 0, 0);
             auto* orbit = lv_obj_get_child(robot, 0);
             if (orbit != nullptr) {
-                lv_anim_delete(orbit, nullptr);
-                lv_obj_set_style_opa(orbit, LV_OPA_COVER, 0);
+                lv_obj_remove_flag(orbit, LV_OBJ_FLAG_HIDDEN);
             }
         }
         if (robot != nullptr && lv_obj_get_child_count(robot) > 0) {
@@ -413,6 +400,7 @@ void PixelTouchUI::Navigate(Page page) {
     DetachRobot();
     lv_obj_clean(body_);
     page_ = page;
+    voice_ring_ = nullptr;
     voice_title_ = nullptr;
     voice_caption_ = nullptr;
     voice_primary_ = nullptr;
@@ -424,10 +412,13 @@ void PixelTouchUI::Navigate(Page page) {
     home_battery_case_ = nullptr;
     home_battery_fill_ = nullptr;
     time_label_ = nullptr;
+    temperature_label_ = nullptr;
     weather_label_ = nullptr;
     lunar_label_ = nullptr;
     calendar_date_label_ = nullptr;
     calendar_detail_label_ = nullptr;
+    calendar_yi_row_ = nullptr;
+    calendar_ji_row_ = nullptr;
     brightness_slider_ = nullptr;
     volume_slider_ = nullptr;
     player_title_ = nullptr;
@@ -652,12 +643,17 @@ void PixelTouchUI::BuildHome() {
     lv_obj_add_event_cb(robot_slot_, OnTalk, LV_EVENT_CLICKED, this);
 
 #if CONFIG_LCDWIKI_ES3C28P_LANDSCAPE
-    time_label_ = Label(body_, "--:--", 17, 53, 182, 53, kText, &es3c28p_ui_clock);
+    time_label_ = Label(body_, "--#71dbd1 :#--", 17, 52, 192, 54, 0xf1f7fc, &es3c28p_ui_clock);
+    lv_label_set_recolor(time_label_, true);
     lv_obj_set_style_text_letter_space(time_label_, -2, 0);
 #else
-    time_label_ = Label(body_, "--:--", 17, 53, 182, 53);
+    time_label_ = Label(body_, "--#71dbd1 :#--", 17, 52, 192, 54);
+    lv_label_set_recolor(time_label_, true);
 #endif
-    weather_label_ = Label(body_, "天气暂无数据", 17, 115, 182, 25, kAccent);
+    temperature_label_ = Label(body_, "", 17, 109, 100, 31, 0xebf4fb, &player_title_font_);
+    lv_obj_set_width(temperature_label_, LV_SIZE_CONTENT);
+    lv_obj_add_flag(temperature_label_, LV_OBJ_FLAG_HIDDEN);
+    weather_label_ = Label(body_, "天气暂无数据", 17, 113, 192, 25, 0xb7cad9);
     lv_label_set_long_mode(weather_label_, LV_LABEL_LONG_DOT);
     lunar_label_ = Label(body_, "农历暂无数据", 17, 141, 182, 20, kMuted, &muted_font_);
     lv_label_set_long_mode(lunar_label_, LV_LABEL_LONG_DOT);
@@ -696,6 +692,39 @@ void PixelTouchUI::BuildVoice() {
     lv_obj_add_flag(robot_slot_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(robot_slot_, OnVoicePrimary, LV_EVENT_CLICKED, this);
 
+    voice_ring_ = lv_obj_create(body_);
+    lv_obj_remove_style_all(voice_ring_);
+    lv_obj_remove_flag(voice_ring_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(voice_ring_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(voice_ring_, 98, 98);
+    lv_obj_align_to(voice_ring_, robot_slot_, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_move_to_index(voice_ring_, lv_obj_get_index(robot_slot_));
+    lv_obj_set_style_radius(voice_ring_, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(voice_ring_, 2, 0);
+    lv_obj_add_event_cb(
+        voice_ring_,
+        [](lv_event_t* event) {
+            auto* self = static_cast<PixelTouchUI*>(lv_event_get_user_data(event));
+            if (self->voice_ring_state_ != VoiceRing::Thinking)
+                return;
+            lv_area_t bounds;
+            lv_obj_get_coords(self->voice_ring_, &bounds);
+            lv_draw_arc_dsc_t arc;
+            lv_draw_arc_dsc_init(&arc);
+            arc.center = {(bounds.x1 + bounds.x2 + 1) / 2, (bounds.y1 + bounds.y2 + 1) / 2};
+            arc.radius = lv_area_get_width(&bounds) / 2;
+            arc.width = 2;
+            arc.color = lv_color_hex(0x6ce0d6);
+            arc.opa = 111;
+            for (int angle = self->voice_ring_angle_; angle < self->voice_ring_angle_ + 360;
+                 angle += 30) {
+                arc.start_angle = angle % 360;
+                arc.end_angle = (angle + 20) % 360;
+                lv_draw_arc(lv_event_get_layer(event), &arc);
+            }
+        },
+        LV_EVENT_DRAW_MAIN, this);
+
     auto* header = lv_obj_get_child(body_, 0);
     auto* media =
         Button(header, "", 210, 2, 28, 30, OnVoicePlayer, this, MATERIAL_SYMBOLS_MUSIC_NOTE);
@@ -705,7 +734,7 @@ void PixelTouchUI::BuildVoice() {
     lv_obj_set_style_text_align(assistant, LV_TEXT_ALIGN_RIGHT, 0);
     voice_title_ = Label(body_, "正在聆听…", 8, 150, 304, 24, kText, &heading_font_);
     lv_obj_set_style_text_align(voice_title_, LV_TEXT_ALIGN_CENTER, 0);
-    voice_caption_ = Label(body_, "我在听，你想聊什么？", 20, 175, 280, 18, kMuted, &muted_font_);
+    voice_caption_ = Label(body_, "我在听，你想聊什么？", 20, 176, 280, 18, 0x9ab5ca, &muted_font_);
     lv_obj_set_style_text_align(voice_caption_, LV_TEXT_ALIGN_CENTER, 0);
 
     voice_messages_ = lv_obj_create(body_);
@@ -720,7 +749,11 @@ void PixelTouchUI::BuildVoice() {
     voice_primary_ = Button(body_, "说话中", 148, 197, 160, 33, OnVoicePrimary, this);
     lv_obj_set_style_radius(voice_stop_, 9, 0);
     lv_obj_set_style_radius(voice_primary_, 9, 0);
+    lv_obj_set_style_bg_color(voice_stop_, lv_color_hex(0x1a2e44), 0);
+    lv_obj_set_style_border_color(voice_stop_, lv_color_hex(0x2f4962), 0);
+    lv_obj_set_style_text_color(lv_obj_get_child(voice_stop_, 0), lv_color_hex(0xd2e1ec), 0);
     lv_obj_set_style_bg_color(voice_primary_, lv_color_hex(0x80e4d7), 0);
+    lv_obj_set_style_border_color(voice_primary_, lv_color_hex(0x80e4d7), 0);
     lv_obj_set_style_text_color(lv_obj_get_child(voice_primary_, 0), lv_color_hex(0x092b34), 0);
     RefreshVoice();
 }
@@ -768,8 +801,11 @@ void PixelTouchUI::UpdateVoiceLayout() {
     if (voice_compact_) {
         lv_obj_set_pos(robot_slot_, 12, 42);
         lv_obj_set_size(robot_slot_, 40, 40);
-        lv_obj_set_pos(voice_title_, 62, 51);
-        lv_obj_set_width(voice_title_, 246);
+        lv_obj_set_size(voice_ring_, 40, 40);
+        lv_obj_align_to(voice_ring_, robot_slot_, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_set_pos(voice_title_, 62, 42);
+        lv_obj_set_size(voice_title_, 246, 40);
+        lv_obj_set_style_pad_top(voice_title_, 11, 0);
         lv_obj_set_style_text_align(voice_title_, LV_TEXT_ALIGN_LEFT, 0);
         lv_obj_add_flag(voice_caption_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(voice_messages_, LV_OBJ_FLAG_HIDDEN);
@@ -835,6 +871,11 @@ void PixelTouchUI::RefreshVoice() {
         enabled = false;
     }
     if (state == kDeviceStateIdle) voice_waiting_response_ = false;
+    const bool thinking = state == kDeviceStateListening && voice_waiting_response_;
+    const auto ring = state == kDeviceStateSpeaking
+                          ? VoiceRing::Speaking
+                          : (thinking ? VoiceRing::Thinking : VoiceRing::Listening);
+    UpdateVoiceRing(ring);
     SetIfChanged(voice_title_, title);
     SetIfChanged(voice_caption_, caption);
     SetIfChanged(lv_obj_get_child(voice_primary_, 0), primary);
@@ -846,6 +887,51 @@ void PixelTouchUI::RefreshVoice() {
         lv_obj_add_state(voice_stop_, LV_STATE_DISABLED);
     else
         lv_obj_remove_state(voice_stop_, LV_STATE_DISABLED);
+}
+
+void PixelTouchUI::UpdateVoiceRing(VoiceRing state) {
+    if (state == voice_ring_state_ && lv_anim_get(voice_ring_, nullptr) != nullptr)
+        return;
+    voice_ring_state_ = state;
+    lv_anim_delete(voice_ring_, nullptr);
+    lv_obj_set_style_transform_width(voice_ring_, 0, 0);
+    lv_obj_set_style_transform_height(voice_ring_, 0, 0);
+    const bool speaking = state == VoiceRing::Speaking;
+    lv_obj_set_style_text_color(voice_title_, lv_color_hex(speaking ? 0xf5d39b : kText), 0);
+    lv_obj_set_style_border_color(voice_ring_, lv_color_hex(speaking ? 0xf9cf88 : 0x6ce0d6), 0);
+
+    lv_anim_t animation;
+    lv_anim_init(&animation);
+    lv_anim_set_var(&animation, voice_ring_);
+    lv_anim_set_user_data(&animation, this);
+    lv_anim_set_repeat_count(&animation, LV_ANIM_REPEAT_INFINITE);
+    if (state == VoiceRing::Thinking) {
+        lv_obj_set_style_border_opa(voice_ring_, LV_OPA_TRANSP, 0);
+        lv_anim_set_custom_exec_cb(&animation, [](lv_anim_t* current, int32_t angle) {
+            auto* self = static_cast<PixelTouchUI*>(lv_anim_get_user_data(current));
+            self->voice_ring_angle_ = angle;
+            lv_obj_invalidate(self->voice_ring_);
+        });
+        lv_anim_set_values(&animation, 0, 360);
+        lv_anim_set_duration(&animation, 3000);
+    } else {
+        // Expand the native border without scaling a render layer or the face.
+        lv_anim_set_custom_exec_cb(&animation, [](lv_anim_t* current, int32_t progress) {
+            auto* self = static_cast<PixelTouchUI*>(lv_anim_get_user_data(current));
+            auto* ring = self->voice_ring_;
+            const auto outset = (lv_obj_get_width(ring) * progress + 1000) / 2000;
+            const int32_t peak =
+                self->voice_ring_state_ == VoiceRing::Speaking ? LV_OPA_COVER : 111;
+            lv_obj_set_style_transform_width(ring, outset, 0);
+            lv_obj_set_style_transform_height(ring, outset, 0);
+            lv_obj_set_style_border_opa(ring, peak * (70 + 30 * progress / 100) / 100, 0);
+        });
+        lv_anim_set_values(&animation, 0, 100);
+        lv_anim_set_duration(&animation, 825);
+        lv_anim_set_playback_duration(&animation, 825);
+        lv_anim_set_path_cb(&animation, lv_anim_path_ease_in_out);
+    }
+    lv_anim_start(&animation);
 }
 
 void PixelTouchUI::BuildCalendar() {
@@ -939,16 +1025,47 @@ void PixelTouchUI::BuildCalendar() {
     StylePanel(calendar_details_popup_, 0x1b314b, 0x42647a);
     lv_obj_set_style_radius(calendar_details_popup_, 12, 0);
     calendar_date_label_ =
-        Label(calendar_details_popup_, "", 16, 12, 238, 24, kText, &heading_font_);
-    Button(calendar_details_popup_, "", 258, 12, 26, 25, OnCalendarClose,
-           this, MATERIAL_SYMBOLS_CLOSE);
-    calendar_detail_label_ =
-        Label(calendar_details_popup_, "点击查询选中日期", 16, 44, 267, 114, kMuted);
+        Label(calendar_details_popup_, "", 16, 12, 238, 22, kText, &heading_font_);
+    auto* close = Button(calendar_details_popup_, "", 258, 11, 26, 24, OnCalendarClose, this,
+                         MATERIAL_SYMBOLS_CLOSE);
+    lv_obj_set_style_bg_opa(close, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(close, 0, 0);
+
+    auto* content = lv_obj_create(calendar_details_popup_);
+    lv_obj_remove_style_all(content);
+    lv_obj_set_pos(content, 16, 39);
+    lv_obj_set_size(content, 268, 121);
+    lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(content, 6, 0);
+    lv_obj_set_style_pad_right(content, 3, 0);
+    lv_obj_remove_flag(content, LV_OBJ_FLAG_SCROLL_CHAIN);
+    lv_obj_set_scroll_dir(content, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(content, LV_SCROLLBAR_MODE_ACTIVE);
+
+    calendar_detail_label_ = Label(content, "", 0, 0, 265, 18, 0x93adbc, &muted_font_);
     lv_label_set_long_mode(calendar_detail_label_, LV_LABEL_LONG_WRAP);
     lv_obj_set_height(calendar_detail_label_, LV_SIZE_CONTENT);
-    lv_obj_add_flag(calendar_details_popup_, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(calendar_details_popup_, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(calendar_details_popup_, LV_SCROLLBAR_MODE_ACTIVE);
+    lv_obj_set_style_min_height(calendar_detail_label_, 19, 0);
+    auto make_row = [&](const char* text, uint32_t bg, uint32_t color) {
+        auto* row = lv_obj_create(content);
+        lv_obj_remove_style_all(row);
+        lv_obj_set_width(row, LV_PCT(100));
+        lv_obj_set_height(row, LV_SIZE_CONTENT);
+        lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        auto* badge = Label(row, text, 0, 0, 20, 20, color, &muted_font_);
+        lv_obj_set_style_bg_color(badge, lv_color_hex(bg), 0);
+        lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(badge, 6, 0);
+        lv_obj_set_style_pad_top(badge, 2, 0);
+        lv_obj_set_style_text_align(badge, LV_TEXT_ALIGN_CENTER, 0);
+        auto* value = Label(row, "", 32, 0, 233, 25, 0xebf4fb);
+        lv_label_set_long_mode(value, LV_LABEL_LONG_WRAP);
+        lv_obj_set_height(value, LV_SIZE_CONTENT);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_HIDDEN);
+        return row;
+    };
+    calendar_yi_row_ = make_row("宜", 0x2c6b5f, 0xb0f2d4);
+    calendar_ji_row_ = make_row("忌", 0x673d50, 0xffd0dc);
     lv_obj_add_flag(calendar_details_popup_, LV_OBJ_FLAG_HIDDEN);
     RefreshCalendar();
 }
@@ -964,9 +1081,30 @@ void PixelTouchUI::BuildPlayer() {
     auto* cover = lv_obj_create(body_);
     lv_obj_set_pos(cover, 21, 48);
     lv_obj_set_size(cover, 77, 77);
-    StylePanel(cover, player_song_mode_ ? 0x765d9b : 0x355f65,
-               player_song_mode_ ? 0x765d9b : 0x355f65);
+    StylePanel(cover, player_song_mode_ ? 0xbd8dba : 0x719b8c, 0);
+    lv_obj_set_style_border_width(cover, 0, 0);
     lv_obj_set_style_radius(cover, 14, 0);
+    lv_obj_set_style_bg_grad_color(cover, lv_color_hex(player_song_mode_ ? 0x393d75 : 0x1b4359), 0);
+    lv_obj_set_style_bg_grad_dir(cover, LV_GRAD_DIR_VER, 0);
+#if LV_USE_DRAW_SW_COMPLEX_GRADIENTS && LV_GRADIENT_MAX_STOPS >= 3
+    const auto make_gradient = [](uint32_t highlight, uint32_t middle, uint32_t edge, int x,
+                                  int y) {
+        lv_grad_dsc_t gradient{};
+        const lv_color_t colors[] = {lv_color_hex(highlight), lv_color_hex(middle),
+                                     lv_color_hex(edge)};
+        const uint8_t stops[] = {0, 140, 255};
+        lv_grad_init_stops(&gradient, colors, nullptr, stops, 3);
+        lv_grad_radial_init(&gradient, x, y, 76, 76, LV_GRAD_EXTEND_PAD);
+        return gradient;
+    };
+    static const auto story_gradient = make_gradient(0x719b8c, 0x355f65, 0x1b4359, 20, 9);
+    static const auto song_gradient = make_gradient(0xbd8dba, 0x765d9b, 0x393d75, 19, 12);
+    lv_obj_set_style_bg_grad(cover, player_song_mode_ ? &song_gradient : &story_gradient, 0);
+#endif
+    lv_obj_set_style_shadow_width(cover, 12, 0);
+    lv_obj_set_style_shadow_offset_y(cover, 8, 0);
+    lv_obj_set_style_shadow_color(cover, lv_color_black(), 0);
+    lv_obj_set_style_shadow_opa(cover, 68, 0);
     lv_obj_add_flag(cover, LV_OBJ_FLAG_CLICKABLE);
     // Retained legacy queue opens by long-press on the cover.
     lv_obj_add_event_cb(cover, OnPlaylistOpen, LV_EVENT_LONG_PRESSED, this);
@@ -975,14 +1113,14 @@ void PixelTouchUI::BuildPlayer() {
         lv_label_set_text(cover_icon, MATERIAL_SYMBOLS_MUSIC_NOTE);
         auto* theme = static_cast<LvglTheme*>(Board::GetInstance().GetDisplay()->GetTheme());
         lv_obj_set_style_text_font(cover_icon, theme->icon_font()->font(), 0);
-        lv_obj_set_style_text_color(cover_icon, lv_color_hex(0xe2f2d6), 0);
+        lv_obj_set_style_text_color(cover_icon, lv_color_hex(0xffe2f0), 0);
         lv_obj_center(cover_icon);
     } else {
         DrawPrototypeBook(cover, true, 19, 19, 0xe2f2d6);
     }
 
     player_status_ = Label(body_, "等待播放", 127, 52, 168, 18, 0x83cfc3, &muted_font_);
-    player_title_ = Label(body_, "暂无播放内容", 115, 73, 186, 31, kText, &player_title_font_);
+    player_title_ = Label(body_, "暂无播放内容", 115, 73, 175, 31, kText, &player_title_font_);
     lv_label_set_long_mode(player_title_, LV_LABEL_LONG_DOT);
     Label(body_, "Jellyfin", 115, 105, 164, 18, 0x89a1b8, &muted_font_);
 
@@ -1291,16 +1429,30 @@ void PixelTouchUI::RefreshHome() {
         std::snprintf(output, sizeof(output), "%d月%d日 · %s",
                       local.tm_mon + 1, local.tm_mday, weekday[local.tm_wday]);
         SetIfChanged(home_day_label_, output);
-        std::snprintf(output, sizeof(output), "%02d:%02d", local.tm_hour, local.tm_min);
+        std::snprintf(output, sizeof(output), "%02d#71dbd1 :#%02d", local.tm_hour, local.tm_min);
         SetIfChanged(time_label_, output);
     }
 #if CONFIG_WEATHER_DASHBOARD
     const auto weather = WeatherService::GetInstance().GetSnapshot();
     if (weather.valid) {
-        std::snprintf(output, sizeof(output), "%d°C %s %s", weather.temperature,
-                      weather.city.c_str(), weather.weather_text.c_str());
-        SetIfChanged(weather_label_, output);
+        std::snprintf(output, sizeof(output), "%d°C", weather.temperature);
+        SetIfChanged(temperature_label_, output);
+        lv_obj_remove_flag(temperature_label_, LV_OBJ_FLAG_HIDDEN);
+        const auto* font = lv_obj_get_style_text_font(temperature_label_, LV_PART_MAIN);
+        lv_point_t text_size;
+        lv_text_get_size(&text_size, output, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        const auto offset = std::min(text_size.x + 6, 191);
+        lv_obj_set_x(weather_label_, 17 + offset);
+        lv_obj_set_width(weather_label_, 192 - offset);
+        std::string description = weather.city;
+        if (!description.empty() && !weather.weather_text.empty())
+            description += " · ";
+        description += weather.weather_text;
+        SetIfChanged(weather_label_, description.c_str());
     } else {
+        lv_obj_add_flag(temperature_label_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_x(weather_label_, 17);
+        lv_obj_set_width(weather_label_, 192);
         SetIfChanged(weather_label_, weather.no_key ? "天气未配置" : "天气暂无数据");
     }
     const auto almanac = AlmanacService::GetInstance().GetSnapshot();
@@ -1322,50 +1474,73 @@ void PixelTouchUI::RefreshCalendar() {
     SetIfChanged(calendar_date_label_, date);
     std::snprintf(date, sizeof(date), "%d月%d日", selected_month_, selected_day_);
     SetIfChanged(calendar_selected_label_, date);
-    SetIfChanged(calendar_lunar_label_, "农历待查询");
 #if CONFIG_WEATHER_DASHBOARD
     AlmanacSnapshot info;
     if (IsSelectedToday()) {
         info = AlmanacService::GetInstance().GetSnapshot();
     } else {
         if (calendar_lookup_unavailable_) {
-            SetIfChanged(calendar_detail_label_, "黄历服务不可用或所选日期不支持");
+            UpdateCalendarDetails("黄历服务不可用或所选日期不支持");
             return;
         }
         const auto lookup = AlmanacService::GetInstance().GetDateResult();
         if (lookup.year != selected_year_ || lookup.month != selected_month_ ||
             lookup.day != selected_day_) {
-            SetIfChanged(calendar_detail_label_, "点击详情查询选中日期");
+            UpdateCalendarDetails("点击详情查询选中日期");
             return;
         }
         if (lookup.loading) {
-            SetIfChanged(calendar_detail_label_, "正在查询选中日期...");
+            UpdateCalendarDetails("正在查询选中日期…");
             return;
         }
         if (!lookup.ready) {
-            SetIfChanged(calendar_detail_label_,
-                lookup.quota_exceeded ? "日历 API 今日配额已用完" :
-                lookup.credentials_invalid ? "万年历密钥无效" :
-                "查询失败，请检查网络和密钥");
+            UpdateCalendarDetails(lookup.quota_exceeded        ? "日历 API 今日配额已用完"
+                                  : lookup.credentials_invalid ? "万年历密钥无效"
+                                                               : "查询失败，请检查网络和密钥");
             return;
         }
         info = lookup.snapshot;
     }
     if (!info.valid) {
-        SetIfChanged(calendar_detail_label_,
-                     info.no_credentials ? "请先配置万年历密钥" : "今日黄历暂无数据");
+        UpdateCalendarDetails(info.no_credentials ? "请先配置万年历密钥" : "今日黄历暂无数据");
         return;
     }
-    SetIfChanged(calendar_lunar_label_, ("农历 " + info.lunar_date).c_str());
-    std::string message = "农历 " + info.lunar_date;
-    if (!info.solar_term.empty()) message += "\n节气 " + info.solar_term;
-    if (!info.yi.empty()) message += "\n宜 " + info.yi.front();
-    if (!info.ji.empty()) message += "\n忌 " + info.ji.front();
-    SetIfChanged(calendar_detail_label_, message.c_str());
+    const std::string lunar = "农历 " + info.lunar_date;
+    SetIfChanged(calendar_lunar_label_, lunar.c_str());
+    std::string summary = lunar;
+    if (!info.solar_term.empty())
+        summary += " · " + info.solar_term;
+    const auto join = [](const std::vector<std::string>& entries) {
+        std::string result;
+        for (const auto& entry : entries) {
+            if (entry.empty())
+                continue;
+            if (!result.empty())
+                result += " · ";
+            result += entry;
+        }
+        return result.empty() ? std::string("暂无数据") : result;
+    };
+    const auto yi = join(info.yi);
+    const auto ji = join(info.ji);
+    UpdateCalendarDetails(summary.c_str(), yi.c_str(), ji.c_str());
 #else
-    SetIfChanged(calendar_detail_label_, "当前固件未启用黄历服务");
-    SetIfChanged(calendar_lunar_label_, "农历不可用");
+    UpdateCalendarDetails("当前固件未启用黄历服务");
 #endif
+}
+
+void PixelTouchUI::UpdateCalendarDetails(const char* lunar, const char* yi, const char* ji) {
+    SetIfChanged(calendar_detail_label_, lunar);
+    if (yi == nullptr || ji == nullptr) {
+        SetIfChanged(calendar_lunar_label_, lunar);
+        lv_obj_add_flag(calendar_yi_row_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(calendar_ji_row_, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    SetIfChanged(lv_obj_get_child(calendar_yi_row_, 1), yi);
+    SetIfChanged(lv_obj_get_child(calendar_ji_row_, 1), ji);
+    lv_obj_remove_flag(calendar_yi_row_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(calendar_ji_row_, LV_OBJ_FLAG_HIDDEN);
 }
 
 void PixelTouchUI::UpdateCalendarSelection() {
@@ -1614,6 +1789,7 @@ void PixelTouchUI::OnCalendarDetail(lv_event_t* event) {
 #endif
     if (self->calendar_details_popup_ != nullptr) {
         lv_obj_clear_flag(self->calendar_details_popup_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_scroll_to_y(lv_obj_get_parent(self->calendar_detail_label_), 0, LV_ANIM_OFF);
         lv_obj_move_to_index(self->calendar_details_popup_,
             lv_obj_get_child_count(self->body_) - 1);
 #if CONFIG_LCDWIKI_ES3C28P_RESOURCE_DIAGNOSTICS
