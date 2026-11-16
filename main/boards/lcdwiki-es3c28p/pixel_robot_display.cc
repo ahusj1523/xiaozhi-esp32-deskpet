@@ -72,14 +72,9 @@ std::unique_ptr<LvglCBinFont> LoadUiFont(const char* name) {
 
 // One existing LVGL line changes its point set; no expression sprites,
 // additional images, canvases or per-frame LVGL object allocations.
-static const lv_point_precise_t kSmile[] = {{0, 0}, {8, 9}, {16, 12}, {24, 9}, {32, 0}};
 static const lv_point_precise_t kHappy[] = {{0, 0}, {8, 12}, {16, 15}, {24, 12}, {32, 0}};
 static const lv_point_precise_t kThinking[] = {{0, 5}, {8, 4}, {16, 4}, {24, 4}, {32, 5}};
 static const lv_point_precise_t kSad[] = {{0, 10}, {8, 2}, {16, 0}, {24, 2}, {32, 10}};
-static const lv_point_precise_t kSpeaking[] = {
-    {12, 3}, {16, 0}, {20, 3}, {21, 8}, {20, 13},
-    {16, 16}, {12, 13}, {11, 8}, {12, 3}
-};
 
 lv_obj_t* PixelRect(lv_obj_t* parent, int x, int y, int w, int h, uint32_t color) {
     lv_obj_t* rect = lv_obj_create(parent);
@@ -107,6 +102,7 @@ PixelRobotDisplay::~PixelRobotDisplay() {
     if (blink_timer_ != nullptr) {
         DisplayLockGuard lock(this);
         lv_timer_delete(blink_timer_);
+        lv_anim_delete(this, nullptr);
         blink_timer_ = nullptr;
     }
 #if CONFIG_LCDWIKI_ES3C28P_RESOURCE_DIAGNOSTICS
@@ -147,27 +143,88 @@ void PixelRobotDisplay::SetupUI() {
     lv_obj_set_size(orbit, 96, 96);
     lv_obj_set_style_radius(orbit, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_border_width(orbit, 1, 0);
-    lv_obj_set_style_border_color(orbit, lv_color_hex(0x418b89), 0);
+    lv_obj_set_style_border_color(orbit, lv_color_hex(0x70e1d4), 0);
+    lv_obj_set_style_border_opa(orbit, 0x44, 0);
+    lv_obj_set_style_shadow_color(orbit, lv_color_hex(0x44b3bd), 0);
+    lv_obj_set_style_shadow_width(orbit, 28, 0);
+    lv_obj_set_style_shadow_opa(orbit, 0x22, 0);
+#if LV_USE_DRAW_SW_COMPLEX_GRADIENTS && LV_GRADIENT_MAX_STOPS >= 3
+    static const auto orbit_glow = [] {
+        lv_grad_dsc_t gradient{};
+        const auto teal = lv_color_hex(0x44b3bd);
+        const lv_color_t colors[] = {teal, teal, teal};
+        const lv_opa_t opacity[] = {0, 4, 0x22};
+        const uint8_t stops[] = {140, 195, 255};
+        lv_grad_init_stops(&gradient, colors, opacity, stops, 3);
+        lv_grad_radial_init(&gradient, LV_GRAD_CENTER, LV_GRAD_CENTER, LV_GRAD_RIGHT,
+                            LV_GRAD_CENTER, LV_GRAD_EXTEND_PAD);
+        return gradient;
+    }();
+    lv_obj_set_style_bg_grad(orbit, &orbit_glow, 0);
+    lv_obj_set_style_bg_opa(orbit, LV_OPA_COVER, 0);
+#endif
     lv_obj_clear_flag(orbit, LV_OBJ_FLAG_CLICKABLE);
 
-    auto* face = robot_face_ = PixelRect(robot, 13, 9, 78, 78, 0x183b59);
+    auto* face = robot_face_ = PixelRect(robot, 13, 9, 78, 78, 0x356d8f);
     lv_obj_set_style_radius(face, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_grad_color(face, lv_color_hex(0x356d8f), 0);
+#if LV_USE_DRAW_SW_COMPLEX_GRADIENTS && LV_GRADIENT_MAX_STOPS >= 3
+    static const auto face_gradient = [] {
+        lv_grad_dsc_t gradient{};
+        const lv_color_t colors[] = {lv_color_hex(0x356d8f), lv_color_hex(0x183b59),
+                                     lv_color_hex(0x122b43)};
+        const uint8_t stops[] = {0, 166, 255};
+        lv_grad_init_stops(&gradient, colors, nullptr, stops, 3);
+        lv_grad_radial_init(&gradient, lv_pct(35), lv_pct(23), LV_GRAD_RIGHT, LV_GRAD_BOTTOM,
+                            LV_GRAD_EXTEND_PAD);
+        return gradient;
+    }();
+    lv_obj_set_style_bg_grad(face, &face_gradient, 0);
+#else
+    lv_obj_set_style_bg_grad_color(face, lv_color_hex(0x183b59), 0);
     lv_obj_set_style_bg_grad_dir(face, LV_GRAD_DIR_VER, 0);
+#endif
     lv_obj_set_style_border_width(face, 1, 0);
-    lv_obj_set_style_border_color(face, lv_color_hex(0x467c95), 0);
+    lv_obj_set_style_border_color(face, lv_color_hex(0x9ae7f4), 0);
+    lv_obj_set_style_border_opa(face, 0x38, 0);
 
     for (int i = 0; i < 2; ++i) {
-        cheeks_[i] = PixelRect(robot, i == 0 ? 25 : 70, 58, 9, 4, 0xd77e91);
+        cheeks_[i] = PixelRect(robot, i == 0 ? 25 : 70, 58, 9, 4, 0xffa4a5);
         lv_obj_set_style_radius(cheeks_[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_shadow_width(cheeks_[i], 4, 0);
+        lv_obj_set_style_shadow_color(cheeks_[i], lv_color_hex(0xffa4a5), 0);
+        lv_obj_set_style_shadow_opa(cheeks_[i], LV_OPA_30, 0);
         eyes_[i] = PixelRect(robot, i == 0 ? 34 : 61, 36, 9, 13, 0xaffbf4);
         lv_obj_set_style_radius(eyes_[i], LV_RADIUS_CIRCLE, 0);
-        // Dark pupils provide gaze changes; the existing blink timer closes
-        // the eye objects themselves and hides pupils during closure.
-        pupils_[i] = PixelRect(robot, i == 0 ? 37 : 64, 41, 3, 3, 0x23516b);
+        lv_obj_set_style_shadow_color(eyes_[i], lv_color_hex(0x66f3e5), 0);
+        lv_obj_set_style_shadow_width(eyes_[i], 9, 0);
+        lv_obj_set_style_shadow_opa(eyes_[i], 0x99, 0);
     }
+    // Use LVGL's arc renderer for the smile and its full-ring border path for speech.
+    curved_mouth_ = lv_obj_create(robot);
+    lv_obj_remove_style_all(curved_mouth_);
+    lv_obj_remove_flag(curved_mouth_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(curved_mouth_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(
+        curved_mouth_,
+        [](lv_event_t* event) {
+            auto* self = static_cast<PixelRobotDisplay*>(lv_event_get_user_data(event));
+            const bool speaking = self->expression_ == RobotExpression::Speaking;
+            lv_area_t bounds;
+            lv_obj_get_coords(lv_event_get_target_obj(event), &bounds);
+            const int32_t diameter = lv_area_get_width(&bounds);
+            lv_draw_arc_dsc_t arc;
+            lv_draw_arc_dsc_init(&arc);
+            arc.center = {bounds.x1 + diameter / 2, bounds.y1 + (speaking ? diameter / 2 : 0)};
+            arc.radius = diameter / 2 - (speaking ? 0 : 1);
+            arc.width = self->robot_compact_ ? 2 : 3;
+            arc.start_angle = speaking ? 0 : 30;
+            arc.end_angle = speaking ? 360 : 150;
+            arc.rounded = !speaking;
+            arc.color = lv_color_hex(0xb0f8f5);
+            lv_draw_arc(lv_event_get_layer(event), &arc);
+        },
+        LV_EVENT_DRAW_MAIN, this);
     mouth_ = lv_line_create(robot);
-    lv_line_set_points(mouth_, kSmile, 5);
     lv_obj_set_pos(mouth_, 36, 53);
     lv_obj_set_style_line_color(mouth_, lv_color_hex(0xb0f8f5), 0);
     lv_obj_set_style_line_width(mouth_, 3, 0);
@@ -179,7 +236,11 @@ void PixelRobotDisplay::SetupUI() {
     lv_obj_set_style_text_color(caption, lv_color_hex(0xa5f2e9), 0);
     lv_obj_set_width(caption, 104);
     lv_obj_set_style_text_align(caption, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(caption, 0, 101);
+    lv_obj_set_pos(caption, 0, 104);
+    // The boot-time robot_area_ is only 100px tall while the caption sits at
+    // y=104, so it would be clipped until the first AttachRobot() resize.
+    // Start hidden; AttachRobot shows it per page (home/voice rules).
+    lv_obj_add_flag(caption, LV_OBJ_FLAG_HIDDEN);
 
     HideDefaultEmotion();
     ApplyChatColors();
@@ -187,11 +248,22 @@ void PixelRobotDisplay::SetupUI() {
     blink_timer_ = lv_timer_create(
         [](lv_timer_t* timer) {
             auto* self = static_cast<PixelRobotDisplay*>(lv_timer_get_user_data(timer));
-            self->blinking_ = !self->blinking_;
-            self->SetEyes(self->blinking_);
-            lv_timer_set_period(timer, self->blinking_ ? 100 : 4900);
+            lv_timer_set_period(timer, 5000);
+            lv_anim_t blink;
+            lv_anim_init(&blink);
+            lv_anim_set_var(&blink, self);
+            lv_anim_set_exec_cb(&blink, [](void* obj, int32_t percent) {
+                auto* display = static_cast<PixelRobotDisplay*>(obj);
+                display->blink_percent_ = percent;
+                display->ApplyEyes();
+            });
+            lv_anim_set_values(&blink, 100, 12);
+            lv_anim_set_duration(&blink, 100);
+            lv_anim_set_playback_duration(&blink, 100);
+            lv_anim_set_path_cb(&blink, lv_anim_path_ease_in_out);
+            lv_anim_start(&blink);
         },
-        4900, this);
+        2150, this);
     touch_ui_ = std::make_unique<PixelTouchUI>(
         lv_screen_active(), content_,
         [](void* context, bool compact) {
@@ -247,9 +319,20 @@ void PixelRobotDisplay::SetupUI() {
 #endif
 }
 
-void PixelRobotDisplay::SetEyes(bool closed) {
-    blinking_ = closed;
-    ApplyExpression();
+void PixelRobotDisplay::ApplyEyes() {
+    const bool happy = expression_ == RobotExpression::Happy;
+    const bool thinking = expression_ == RobotExpression::Thinking;
+    const bool sad = expression_ == RobotExpression::Sad;
+    const int32_t open_height = happy ? 7 : (thinking ? 9 : 13);
+    const int32_t open_y = happy ? 39 : (sad ? 38 : 36);
+    const int32_t height = robot_compact_ ? (open_height * 2 + 3) / 5 : open_height;
+    const int32_t y = robot_compact_ ? (open_y * 2 + 1) / 5 : open_y;
+    const int32_t visible_height = std::max<int32_t>(1, (height * blink_percent_ + 50) / 100);
+    for (int i = 0; i < 2; ++i) {
+        const int32_t x = robot_compact_ ? (i == 0 ? 12 : 24) : (i == 0 ? 34 : 61);
+        lv_obj_set_pos(eyes_[i], x, y + (height - visible_height) / 2);
+        lv_obj_set_size(eyes_[i], robot_compact_ ? 4 : 9, visible_height);
+    }
 }
 
 void PixelRobotDisplay::SetRobotCompact(bool compact) {
@@ -263,6 +346,7 @@ void PixelRobotDisplay::SetRobotCompact(bool compact) {
     lv_obj_set_pos(robot_face_, compact ? 4 : 13, compact ? 4 : 9);
     lv_obj_set_size(robot_face_, compact ? 32 : 78, compact ? 32 : 78);
     for (int i = 0; i < 2; ++i) {
+        lv_obj_set_style_shadow_width(eyes_[i], compact ? 4 : 9, 0);
         if (compact)
             lv_obj_add_flag(cheeks_[i], LV_OBJ_FLAG_HIDDEN);
         else
@@ -280,27 +364,28 @@ void PixelRobotDisplay::ApplyExpression() {
     const auto position = [this](int point) {
         return robot_compact_ ? (point * 2 + 2) / 5 : point;
     };
-    for (int i = 0; i < 2; ++i) {
-        const int x = i == 0 ? 34 : 61;
-        const int height = blinking_ ? 2 : (happy ? 7 : (thinking ? 9 : 13));
-        const int y = blinking_ ? 41 : (happy ? 39 : (sad ? 38 : 36));
-        lv_obj_set_pos(eyes_[i], position(x) - (robot_compact_ ? 1 : 0), position(y));
-        lv_obj_set_size(eyes_[i], position(9), position(height));
-        if (blinking_ || happy || robot_compact_) {
-            lv_obj_add_flag(pupils_[i], LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_remove_flag(pupils_[i], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_pos(pupils_[i], x + (thinking ? 5 : 3), y + (sad ? 5 : 4));
-        }
-        lv_obj_set_style_bg_opa(cheeks_[i], happy || speaking ? LV_OPA_COVER : LV_OPA_50, 0);
+    ApplyEyes();
+    for (auto* cheek : cheeks_) {
+        lv_obj_set_style_bg_opa(cheek, happy || speaking ? LV_OPA_60 : LV_OPA_30, 0);
     }
+    if (speaking || expression_ == RobotExpression::Neutral) {
+        lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+        if (speaking) {
+            const int32_t diameter = robot_compact_ ? 8 : 16;
+            lv_obj_set_pos(curved_mouth_, robot_compact_ ? 16 : 44, robot_compact_ ? 20 : 51);
+            lv_obj_set_size(curved_mouth_, diameter, diameter);
+        } else {
+            lv_obj_set_pos(curved_mouth_, robot_compact_ ? 13 : 38, robot_compact_ ? 22 : 53);
+            lv_obj_set_size(curved_mouth_, robot_compact_ ? 14 : 28, robot_compact_ ? 8 : 16);
+        }
+        lv_obj_remove_flag(curved_mouth_, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_add_flag(curved_mouth_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
 
-    const auto* points = sad        ? kSad
-                         : thinking ? kThinking
-                         : speaking ? kSpeaking
-                         : happy    ? kHappy
-                                    : kSmile;
-    const int count = speaking ? 9 : 5;
+    const auto* points = sad ? kSad : (thinking ? kThinking : kHappy);
+    constexpr int count = 5;
     if (robot_compact_) {
         for (int i = 0; i < count; ++i) {
             mouth_points_[i] = {position(points[i].x), position(points[i].y)};
@@ -310,7 +395,7 @@ void PixelRobotDisplay::ApplyExpression() {
     lv_line_set_points(mouth_, points, count);
     lv_obj_set_style_line_color(mouth_, lv_color_hex(sad ? 0x96c1d6 : 0xb0f8f5), 0);
     lv_obj_set_style_line_width(mouth_, robot_compact_ ? 2 : (happy ? 4 : 3), 0);
-    lv_obj_set_pos(mouth_, position(36) - (robot_compact_ ? 1 : 0), position(speaking ? 51 : 53));
+    lv_obj_set_pos(mouth_, position(36) - (robot_compact_ ? 1 : 0), position(53));
 }
 
 void PixelRobotDisplay::HideDefaultEmotion() {
@@ -469,11 +554,11 @@ bool PixelRobotDisplay::SetEmotion(const char* emotion) {
 void PixelRobotDisplay::SetMediaState(const char* state, const char* title,
                                       int64_t position_ms, int64_t duration_ms,
                                       int current_index, int playlist_length,
-                                      const char* error) {
+                                      const char* error, std::optional<bool> shuffle) {
     DisplayLockGuard lock(this);
     if (touch_ui_ != nullptr) {
         touch_ui_->SetMediaState(state, title, position_ms, duration_ms,
-                                 current_index, playlist_length, error);
+                                 current_index, playlist_length, error, shuffle);
     }
 }
 

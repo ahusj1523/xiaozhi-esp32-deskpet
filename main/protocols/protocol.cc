@@ -105,16 +105,22 @@ void Protocol::SendMcpMessage(const std::string& payload) {
     SendText(message);
 }
 
-void Protocol::SendMediaControl(const std::string& action, int index, int64_t position_ms) {
+void Protocol::SendMediaControl(const std::string& action, int index, int64_t position_ms,
+                                std::optional<bool> shuffle) {
     // Defence in depth for callers outside the touch UI.
     if (!SupportsMediaControl()) return;
     if ((action == "play_story" || action == "play_song") && !SupportsMediaPlaylistStart())
+        return;
+    if (action == "set_shuffle" && (!SupportsMediaShuffle() || !shuffle.has_value()))
         return;
     cJSON* root = cJSON_CreateObject();
     if (root == nullptr) return;
     cJSON_AddStringToObject(root, "type", "media");
     cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
     cJSON_AddStringToObject(root, "state", action.c_str());
+    if (SupportsMediaShuffle() && shuffle.has_value()) {
+        cJSON_AddBoolToObject(root, "shuffle", *shuffle);
+    }
     if (index >= 0) cJSON_AddNumberToObject(root, "index", index);
     if (position_ms >= 0) {
         cJSON_AddNumberToObject(root, "position_ms", static_cast<double>(position_ms));
@@ -136,6 +142,9 @@ void Protocol::ParseServerCapabilities(const cJSON* hello) {
     media_playlist_start_supported_.store(
         supported &&
         cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(features, "media_playlist_start")));
+    media_shuffle_supported_.store(
+        SupportsMediaPlaylistStart() &&
+        cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(features, "media_shuffle")));
     media_control_supported_.store(supported);
     ESP_LOGI(TAG, "Server media control: %s, playlist start: %s",
              supported ? "supported" : "unavailable",

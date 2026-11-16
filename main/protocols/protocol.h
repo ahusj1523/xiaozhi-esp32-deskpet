@@ -5,6 +5,7 @@
 #include <chrono>
 #include <atomic>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -69,10 +70,11 @@ public:
     virtual void SendAbortSpeaking(AbortReason reason);
     virtual void SendMcpMessage(const std::string& message);
     void SendMediaControl(const std::string& action, int index = -1,
-                          int64_t position_ms = -1);
+                          int64_t position_ms = -1, std::optional<bool> shuffle = std::nullopt);
     // An absent feature in an older server hello means media control is unavailable.
     bool SupportsMediaControl() const { return media_control_supported_.load(); }
     bool SupportsMediaPlaylistStart() const { return media_playlist_start_supported_.load(); }
+    bool SupportsMediaShuffle() const { return media_shuffle_supported_.load(); }
 
 protected:
     std::function<void(const cJSON* root)> on_incoming_json_;
@@ -89,10 +91,12 @@ protected:
     std::string session_id_;
     std::atomic<bool> media_control_supported_{false};
     std::atomic<bool> media_playlist_start_supported_{false};
+    std::atomic<bool> media_shuffle_supported_{false};
 
     void ResetServerCapabilities() {
         media_control_supported_.store(false);
         media_playlist_start_supported_.store(false);
+        media_shuffle_supported_.store(false);
     }
     void ParseServerCapabilities(const cJSON* hello);
     std::chrono::time_point<std::chrono::steady_clock> last_incoming_time_;

@@ -20,7 +20,7 @@ public:
     bool SetEmotion(const char* emotion) override;
     void SetMediaState(const char* state, const char* title, int64_t position_ms,
                        int64_t duration_ms, int current_index, int playlist_length,
-                       const char* error) override;
+                       const char* error, std::optional<bool> shuffle) override;
     void SetMediaPlaylist(int offset, const std::vector<std::string>& titles) override;
 #if CONFIG_WEATHER_DASHBOARD
     void ShowDashboard() override;
@@ -33,7 +33,7 @@ private:
     void StyleMessages();
     void StyleMessage(lv_obj_t* row);
     void HideDefaultEmotion();
-    void SetEyes(bool closed);
+    void ApplyEyes();
     void ApplyExpression();
     void SetRobotCompact(bool compact);
 
@@ -45,20 +45,20 @@ private:
     lv_obj_t* robot_area_ = nullptr;
     lv_obj_t* robot_face_ = nullptr;
     lv_obj_t* robot_orbit_ = nullptr;
-    lv_point_precise_t mouth_points_[9]{};
+    lv_point_precise_t mouth_points_[5]{};
     bool robot_compact_ = false;
     lv_obj_t* chat_player_button_ = nullptr;
     enum class RobotExpression { Neutral, Happy, Thinking, Sad, Speaking };
     RobotExpression expression_ = RobotExpression::Neutral;
     lv_obj_t* eyes_[2] = {nullptr, nullptr};
     lv_obj_t* cheeks_[2] = {nullptr, nullptr};
-    lv_obj_t* pupils_[2] = {nullptr, nullptr};
+    lv_obj_t* curved_mouth_ = nullptr;
     lv_obj_t* mouth_ = nullptr;
     lv_timer_t* blink_timer_ = nullptr;
 #if CONFIG_LCDWIKI_ES3C28P_RESOURCE_DIAGNOSTICS
     lv_timer_t* resource_timer_ = nullptr;
 #endif
-    bool blinking_ = false;
+    int32_t blink_percent_ = 100;
 };
 
 #endif

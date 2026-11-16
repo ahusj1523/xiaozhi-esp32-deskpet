@@ -969,6 +969,7 @@ elseif(CONFIG_BOARD_TYPE_LCDWIKI_ES3C28P)
             "boards/lcdwiki-es3c28p/fonts/es3c28p_ui_clock.c"
             "boards/lcdwiki-es3c28p/fonts/es3c28p_ui_heading.c"
         )
+        set(ES3C28P_UI_EMBED "boards/lcdwiki-es3c28p/assets/es3c28p_v11_backdrop.rgb565")
     endif()
 elseif(CONFIG_BOARD_TYPE_LCDWIKI_ES3C35P)
     set(BOARD_DIR "lcdwiki-es3c35p")
@@ -1241,7 +1242,7 @@ endif()
 # the early-expansion pass where CONFIG_* variables are not yet defined.
 list(APPEND MAIN_PRIV_REQUIRES_EXTRA esp_driver_usb_serial_jtag)
 idf_component_register(SRCS ${SOURCES}
-                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS} ${DASHBOARD_EMBED}
+                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS} ${DASHBOARD_EMBED} ${ES3C28P_UI_EMBED}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
                     WHOLE_ARCHIVE
                     PRIV_REQUIRES
