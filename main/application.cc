@@ -343,6 +343,7 @@ void Application::HandleNetworkConnectedEvent() {
 
 void Application::HandleNetworkDisconnectedEvent() {
     media_playlist_start_supported_.store(false);
+    media_shuffle_supported_.store(false);
     media_control_state_.store(MediaControlState::kDisconnected);
     // Close current conversation when network disconnected
     auto state = GetDeviceState();
@@ -615,6 +616,7 @@ void Application::InitializeProtocol() {
 
     protocol_->OnAudioChannelClosed([this, &board]() {
         media_playlist_start_supported_.store(false);
+        media_shuffle_supported_.store(false);
         media_control_state_.store(MediaControlState::kDisconnected);
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         Schedule([this]() {
@@ -723,7 +725,7 @@ void Application::InitializeProtocol() {
                 });
             }
         } else if (strcmp(type->valuestring, "media") == 0) {
-            // The Go server owns playback and playlists. Copy only bounded
+            // The server owns playback and playlists. Copy only bounded
             // metadata before leaving the incoming JSON callback.
             auto state = cJSON_GetObjectItem(root, "state");
             if (!cJSON_IsString(state)) return;
@@ -743,6 +745,9 @@ void Application::InitializeProtocol() {
                 ? static_cast<int64_t>(duration->valuedouble) : 0;
             int current_index = cJSON_IsNumber(index) ? index->valueint : -1;
             int playlist_length = cJSON_IsNumber(length) ? length->valueint : 0;
+            const auto* shuffle = cJSON_GetObjectItemCaseSensitive(root, "shuffle");
+            const auto media_shuffle = cJSON_IsBool(shuffle)
+                ? std::optional<bool>(cJSON_IsTrue(shuffle)) : std::nullopt;
             auto page = cJSON_GetObjectItem(root, "page_offset");
             bool has_page = cJSON_IsNumber(page);
             int page_offset = has_page ? page->valueint : 0;
@@ -759,15 +764,18 @@ void Application::InitializeProtocol() {
                     }
                 }
             }
-            Schedule([display, media_state = std::string(state->valuestring),
+            Schedule([this, display, generation = GetMediaControlGeneration(),
+                      media_state = std::string(state->valuestring),
                       media_title = std::string(title_str, strnlen(title_str, 192)),
                       media_error = std::string(error_str, strnlen(error_str, 128)),
                       position_ms, duration_ms, current_index, playlist_length,
-                      has_page, page_offset,
+                      has_page, page_offset, media_shuffle,
                       playlist_titles = std::move(playlist_titles)]() {
+                if (generation != GetMediaControlGeneration())
+                    return;
                 display->SetMediaState(media_state.c_str(), media_title.c_str(),
                                        position_ms, duration_ms, current_index, playlist_length,
-                                       media_error.c_str());
+                                       media_error.c_str(), media_shuffle);
                 if (has_page) {
                     display->SetMediaPlaylist(page_offset, playlist_titles);
                 }
@@ -1375,6 +1383,7 @@ ListeningMode Application::GetDefaultListeningMode() const {
 void Application::Reboot() {
     ESP_LOGI(TAG, "Rebooting...");
     media_playlist_start_supported_.store(false);
+    media_shuffle_supported_.store(false);
     media_control_state_.store(MediaControlState::kDisconnected);
     if (GetDeviceState() == kDeviceStateNotifying) {
         StopNotification();
@@ -1522,18 +1531,21 @@ void Application::RefreshMediaControlState() {
     if (!startup_completed_ || state == kDeviceStateActivating || state == kDeviceStateStarting ||
         state == kDeviceStateWifiConfiguring || !protocol_ || !protocol_->IsAudioChannelOpened()) {
         media_playlist_start_supported_.store(false);
+        media_shuffle_supported_.store(false);
         media_control_state_.store(MediaControlState::kDisconnected);
     } else if (!protocol_->SupportsMediaControl()) {
         media_playlist_start_supported_.store(false);
+        media_shuffle_supported_.store(false);
         media_control_state_.store(MediaControlState::kUnsupported);
     } else {
         media_playlist_start_supported_.store(protocol_->SupportsMediaPlaylistStart());
+        media_shuffle_supported_.store(protocol_->SupportsMediaShuffle());
         media_control_state_.store(MediaControlState::kAvailable);
     }
 }
 
-void Application::StartMediaPlaylist(bool songs) {
-    Schedule([this, songs]() {
+void Application::StartMediaPlaylist(bool songs, bool shuffle) {
+    Schedule([this, songs, shuffle]() {
         if (!startup_completed_ || !protocol_)
             return;
         if (!protocol_->IsAudioChannelOpened()) {
@@ -1541,7 +1553,7 @@ void Application::StartMediaPlaylist(bool songs) {
                 return;
             }
             // Use the same deferred audio handshake as voice, then stay out of listening mode.
-            Schedule([this, songs]() {
+            Schedule([this, songs, shuffle]() {
                 if (GetDeviceState() != kDeviceStateConnecting)
                     return;
                 auto& board = Board::GetInstance();
@@ -1552,7 +1564,7 @@ void Application::StartMediaPlaylist(bool songs) {
                     board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
                     return;
                 }
-                StartMediaPlaylist(songs);
+                StartMediaPlaylist(songs, shuffle);
             });
             return;
         }
@@ -1569,7 +1581,17 @@ void Application::StartMediaPlaylist(bool songs) {
             // TTS stop returns the device to idle without automatically opening the microphone.
             listening_mode_ = kListeningModeManualStop;
         }
-        protocol_->SendMediaControl(songs ? "play_song" : "play_story");
+        protocol_->SendMediaControl(songs ? "play_song" : "play_story", -1, -1, shuffle);
+    });
+}
+
+void Application::SetMediaShuffle(bool shuffle) {
+    const auto generation = GetMediaControlGeneration();
+    Schedule([this, generation, shuffle]() {
+        RefreshMediaControlState();
+        if (generation == GetMediaControlGeneration() && SupportsMediaShuffle()) {
+            protocol_->SendMediaControl("set_shuffle", -1, -1, shuffle);
+        }
     });
 }
 
@@ -1617,6 +1639,7 @@ void Application::PlaySound(const std::string_view& sound) { audio_service_.Play
 void Application::ResetProtocol() {
     Schedule([this]() {
         media_playlist_start_supported_.store(false);
+        media_shuffle_supported_.store(false);
         media_control_state_.store(MediaControlState::kDisconnected);
         if (GetDeviceState() == kDeviceStateNotifying) {
             StopNotification();

@@ -123,8 +123,12 @@ public:
     // UI -> existing device control channel, scheduled on the main task.
     void SendMediaCommand(const std::string& action, int index = -1,
                           int64_t position_ms = -1);
-    void StartMediaPlaylist(bool songs);
+    void StartMediaPlaylist(bool songs, bool shuffle);
+    void SetMediaShuffle(bool shuffle);
     bool SupportsMediaPlaylistStart() const { return media_playlist_start_supported_.load(); }
+    bool SupportsMediaShuffle() const {
+        return IsMediaControlAvailable() && media_shuffle_supported_.load();
+    }
     MediaControlState GetMediaControlState() const { return media_control_state_.load(); }
     uint32_t GetMediaControlGeneration() const { return media_control_generation_.load(); }
     bool IsMediaControlAvailable() const {
@@ -152,6 +156,7 @@ private:
     std::unique_ptr<Protocol> protocol_;
     std::atomic<MediaControlState> media_control_state_{MediaControlState::kDisconnected};
     std::atomic<bool> media_playlist_start_supported_{false};
+    std::atomic<bool> media_shuffle_supported_{false};
     std::atomic<uint32_t> media_control_generation_{0};
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;

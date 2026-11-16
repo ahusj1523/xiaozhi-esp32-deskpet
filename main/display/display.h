@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -70,7 +71,8 @@ public:
     virtual void SetMediaState(const char* /*state*/, const char* /*title*/,
                                int64_t /*position_ms*/, int64_t /*duration_ms*/,
                                int /*current_index*/,
-                               int /*playlist_length*/, const char* /*error*/) {}
+                               int /*playlist_length*/, const char* /*error*/,
+                               std::optional<bool> /*shuffle*/ = std::nullopt) {}
     virtual void SetMediaPlaylist(int /*offset*/,
                                   const std::vector<std::string>& /*titles*/) {}
     virtual bool InsertAnimDialog(const char* name, uint32_t duration_ms) {

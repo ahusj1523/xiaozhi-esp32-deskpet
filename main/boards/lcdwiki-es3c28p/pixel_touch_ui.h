@@ -2,6 +2,7 @@
 
 #include <lvgl.h>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -25,7 +26,7 @@ public:
     void Refresh();
     void SetMediaState(const char* state, const char* title, int64_t position_ms,
                        int64_t duration_ms, int current_index, int playlist_length,
-                       const char* error);
+                       const char* error, std::optional<bool> shuffle);
     void SetMediaPlaylist(int offset, const std::vector<std::string>& titles);
     void OnChatMessage(const char* role, const char* content);
 
@@ -52,10 +53,12 @@ private:
     void SyncMediaAvailability();
     void UpdatePlayer();
     void StartPlayerPlaylist();
+    void SaveShufflePreference(bool shuffle);
     void UpdatePlaylist();
     void BuildSettings();
     void BuildHeader(const char* title, bool back = false);
     void RefreshHome();
+    void RefreshClock();
     void RefreshCalendar();
     void UpdateCalendarDetails(const char* lunar, const char* yi = nullptr,
                                const char* ji = nullptr);
@@ -84,6 +87,7 @@ private:
     static void OnMediaPrev(lv_event_t* event);
     static void OnMediaToggle(lv_event_t* event);
     static void OnMediaNext(lv_event_t* event);
+    static void OnMediaShuffle(lv_event_t* event);
     static void OnMediaStop(lv_event_t* event);
     static void OnMediaPressed(lv_event_t* event);
     static void OnMediaSeek(lv_event_t* event);
@@ -104,6 +108,10 @@ private:
     Page queued_page_ = Page::Home;
     bool media_available_ = false;
     bool player_song_mode_ = false;
+    bool shuffle_preference_ = true;
+    std::optional<bool> media_shuffle_;
+    std::optional<bool> requested_shuffle_;
+    uint32_t shuffle_request_tick_ = 0;
     bool player_start_pending_ = false;
     bool player_start_failed_ = false;
     uint32_t player_start_tick_ = 0;
@@ -137,6 +145,7 @@ private:
     lv_obj_t* robot_area_ = nullptr;
     lv_obj_t* chat_container_ = nullptr;
     lv_obj_t* robot_slot_ = nullptr;
+    lv_obj_t* home_orbit_ = nullptr;
     lv_obj_t* chat_content_;
     SetRobotCompact set_robot_compact_;
     void* robot_context_;
@@ -145,17 +154,18 @@ private:
     lv_font_t player_title_font_{};
     lv_font_t calendar_digit_font_{};
     lv_obj_t* home_day_label_ = nullptr;
-    lv_obj_t* home_hint_label_ = nullptr;
     lv_obj_t* home_network_icon_ = nullptr;
     lv_obj_t* home_battery_case_ = nullptr;
     lv_obj_t* home_battery_fill_ = nullptr;
     lv_obj_t* voice_ring_ = nullptr;
     lv_obj_t* voice_title_ = nullptr;
-    lv_obj_t* voice_caption_ = nullptr;
     lv_obj_t* voice_primary_ = nullptr;
     lv_obj_t* voice_stop_ = nullptr;
     lv_obj_t* voice_messages_ = nullptr;
-    lv_obj_t* time_label_ = nullptr;
+    lv_obj_t* clock_ = nullptr;
+    lv_obj_t* clock_hours_ = nullptr;
+    lv_obj_t* clock_colon_ = nullptr;
+    lv_obj_t* clock_minutes_ = nullptr;
     lv_obj_t* temperature_label_ = nullptr;
     lv_obj_t* weather_label_ = nullptr;
     lv_obj_t* lunar_label_ = nullptr;
@@ -166,6 +176,7 @@ private:
     lv_obj_t* calendar_month_label_ = nullptr;
     lv_obj_t* calendar_selected_label_ = nullptr;
     lv_obj_t* calendar_lunar_label_ = nullptr;
+    lv_obj_t* calendar_tip_label_ = nullptr;
     lv_obj_t* calendar_details_popup_ = nullptr;
     lv_obj_t* child_mode_switch_ = nullptr;
     lv_obj_t* settings_foot_ = nullptr;
@@ -183,8 +194,10 @@ private:
     lv_obj_t* player_toggle_ = nullptr;
     lv_obj_t* player_prev_button_ = nullptr;
     lv_obj_t* player_next_button_ = nullptr;
+    lv_obj_t* player_shuffle_button_ = nullptr;
     lv_obj_t* playlist_panel_ = nullptr;
     lv_obj_t* playlist_buttons_[6] = {};
     lv_obj_t* playlist_page_label_ = nullptr;
     lv_timer_t* refresh_timer_ = nullptr;
+    lv_timer_t* clock_timer_ = nullptr;
 };
