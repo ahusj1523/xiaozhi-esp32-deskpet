@@ -461,6 +461,14 @@ public:
         InitializeConsole();
 #endif
         GetBacklight()->RestoreBrightness();
+#if 1  // AUTO_PLAY_TEST: temporary self-test, no microphone needed
+        xTaskCreate([](void*) {
+                vTaskDelay(pdMS_TO_TICKS(20000));  // let WiFi/MQTT settle
+                ESP_LOGI(TAG, "AUTO_PLAY_TEST: triggering Play(后来)");
+                MusicPlayer::GetInstance().Play("后来");
+                vTaskDelete(nullptr);
+            }, "auto_play", 4096, nullptr, 1, nullptr);
+#endif
     }
 
     virtual AudioCodec* GetAudioCodec() override {
