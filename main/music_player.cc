@@ -76,6 +76,74 @@ void ResampleToMono(const int16_t* src, size_t src_frames, int in_channels,
 
 }  // namespace
 
+std::unique_ptr<Http> MusicPlayer::OpenFollowingRedirects(
+    const std::string& url, int timeout_ms, const std::string& accept_header) {
+    std::string current = url;
+    for (int hop = 0; hop <= kMaxRedirects; ++hop) {
+        auto http = Board::GetInstance().GetNetwork()->CreateHttp(0);
+        if (!http) {
+            ESP_LOGE(TAG, "No HTTP client (redirect hop %d)", hop);
+            return nullptr;
+        }
+        http->SetTimeout(timeout_ms);
+        http->SetHeader("User-Agent", "Mozilla/5.0");
+        http->SetHeader("Referer", "https://music.163.com");
+        if (!accept_header.empty()) {
+            http->SetHeader("Accept", accept_header);
+        }
+
+        auto opened = http->Open("GET", current);
+        if (!opened) {
+            ESP_LOGE(TAG, "HTTP open failed (hop %d): %s", hop,
+                     opened.error().ToString().c_str());
+            http->Close();
+            return nullptr;
+        }
+        auto status = http->GetStatusCode();
+        int code = status ? *status : -1;
+
+        if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+            std::string location = http->GetResponseHeader("Location");
+            ESP_LOGI(TAG, "Redirect %d (hop %d) -> %s", code, hop,
+                     location.empty() ? "(none)" : location.c_str());
+            http->Close();
+            if (location.empty() || location == current) {
+                ESP_LOGE(TAG, "Empty/looping redirect location");
+                return nullptr;
+            }
+            // Resolve a relative Location against the current URL origin.
+            if (location.rfind("http://", 0) != 0 && location.rfind("https://", 0) != 0) {
+                auto scheme_end = current.find("://");
+                auto slash = current.find('/', scheme_end == std::string::npos
+                                                    ? 0
+                                                    : scheme_end + 3);
+                std::string origin = slash == std::string::npos
+                                         ? current
+                                         : current.substr(0, slash);
+                if (!location.empty() && location[0] == '/') {
+                    location = origin + location;
+                } else {
+                    location = origin + "/" + location;
+                }
+                ESP_LOGI(TAG, "Resolved relative redirect -> %s", location.c_str());
+            }
+            current = location;
+            continue;
+        }
+
+        if (code < 200 || code >= 300) {
+            ESP_LOGE(TAG, "HTTP status %d (hop %d)", code, hop);
+            http->Close();
+            return nullptr;
+        }
+        // 2xx: hand the ready-to-read client back to the caller.
+        return http;
+    }
+
+    ESP_LOGE(TAG, "Too many redirects (>%d)", kMaxRedirects);
+    return nullptr;
+}
+
 MusicPlayer& MusicPlayer::GetInstance() {
     static MusicPlayer instance;
     return instance;
@@ -153,29 +221,56 @@ bool MusicPlayer::SearchSong(const std::string& query, std::string& mp3_url,
         return false;
     }
     bool found = false;
+    // Prefer a free (fee==0) track, but fall back to any track whose outer
+    // link may still be playable — many "VIP" tracks stream fine via the
+    // outer URL, and being too strict made popular songs (e.g. 晴天) fail.
+    std::string fallback_url, fallback_title;
     cJSON* result = cJSON_GetObjectItemCaseSensitive(root, "result");
     cJSON* songs = result ? cJSON_GetObjectItemCaseSensitive(result, "songs") : nullptr;
     if (cJSON_IsArray(songs)) {
         int count = cJSON_GetArraySize(songs);
-        for (int i = 0; i < count && !found; ++i) {
+        for (int i = 0; i < count; ++i) {
             cJSON* song = cJSON_GetArrayItem(songs, i);
             if (!song) continue;
             cJSON* fee = cJSON_GetObjectItemCaseSensitive(song, "fee");
             cJSON* id = cJSON_GetObjectItemCaseSensitive(song, "id");
             cJSON* name = cJSON_GetObjectItemCaseSensitive(song, "name");
-            // fee==0 means freely playable. Skip VIP/paid tracks.
-            if (!cJSON_IsNumber(id) || !cJSON_IsNumber(fee) || fee->valueint != 0) continue;
+            if (!cJSON_IsNumber(id)) continue;
+
+            // song id is 64-bit (e.g. 3455095614 > INT32_MAX): use valuedouble.
+            long long song_id = static_cast<long long>(id->valuedouble);
             char idbuf[32];
-            snprintf(idbuf, sizeof(idbuf), "%d", id->valueint);
-            mp3_url = std::string("https://music.163.com/song/media/outer/url?id=") +
-                      idbuf + ".mp3";
-            title = cJSON_IsString(name) && name->valuestring ? name->valuestring : "未知歌曲";
-            found = true;
+            snprintf(idbuf, sizeof(idbuf), "%lld", song_id);
+            // Keep the https origin: the CDN only serves the real MP3 when the
+            // redirect came from https (plain http origin gets a 403). We
+            // follow the https->http 302 manually in OpenFollowingRedirects.
+            std::string url = std::string("https://music.163.com/song/media/outer/url?id=") +
+                              idbuf + ".mp3";
+            std::string title_str =
+                cJSON_IsString(name) && name->valuestring ? name->valuestring : "未知歌曲";
+
+            bool is_free = cJSON_IsNumber(fee) && fee->valueint == 0;
+            if (is_free && !found) {
+                mp3_url = url;
+                title = title_str;
+                found = true;
+                break;
+            }
+            if (fallback_url.empty()) {
+                fallback_url = url;
+                fallback_title = title_str;
+            }
         }
     }
     cJSON_Delete(root);
+    if (!found && !fallback_url.empty()) {
+        mp3_url = fallback_url;
+        title = fallback_title;
+        found = true;
+        ESP_LOGI(TAG, "Using fallback (non-free) track: %s", title.c_str());
+    }
     if (!found) {
-        ESP_LOGW(TAG, "No free (fee=0) song found for: %s", query.c_str());
+        ESP_LOGW(TAG, "No song found for: %s", query.c_str());
     }
     return found;
 }
@@ -188,22 +283,10 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
         return false;
     }
 
-    // Open the MP3 stream.
-    auto http = board.GetNetwork()->CreateHttp(0);
-    if (!http) return false;
-    http->SetTimeout(10000);
-    http->SetHeader("User-Agent", "Mozilla/5.0");
-    http->SetHeader("Accept", "audio/mpeg,*/*");
-    auto opened = http->Open("GET", mp3_url);
-    if (!opened) {
-        ESP_LOGE(TAG, "MP3 open failed: %s", opened.error().ToString().c_str());
-        http->Close();
-        return false;
-    }
-    auto status = http->GetStatusCode();
-    if (!status || *status != 200) {
-        ESP_LOGE(TAG, "MP3 HTTP status: %d", status ? *status : -1);
-        http->Close();
+    // Open the MP3 stream, following the NetEase 302 redirect to the CDN.
+    auto http = OpenFollowingRedirects(mp3_url, 10000, "audio/mpeg,*/*");
+    if (!http) {
+        ESP_LOGE(TAG, "MP3 open/redirect failed");
         return false;
     }
 
@@ -214,7 +297,6 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
     esp_audio_err_t derr = esp_mp3_dec_open(nullptr, 0, &dec);
     if (derr != ESP_AUDIO_ERR_OK || !dec) {
         ESP_LOGE(TAG, "mp3 decoder open failed: %d", derr);
-        http->Close();
         return false;
     }
 
@@ -268,6 +350,11 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
             int rate = detected_rate > 0 ? detected_rate : 44100;
             int ch = detected_channels > 0 ? detected_channels : 2;
 
+            // AudioService's power timer may disable output while we stream
+            // (we bypass its output task). Re-enable PA if it was turned off.
+            if (!codec->output_enabled()) {
+                codec->EnableOutput(true);
+            }
             std::vector<int16_t> pcm_out;
             const int16_t* samples = reinterpret_cast<const int16_t*>(frame.buffer);
             size_t frames = frame.decoded_size / (2 * static_cast<size_t>(ch));
@@ -297,29 +384,19 @@ void MusicPlayer::Task() {
 
     auto& app = Application::GetInstance();
 
-    // Enter notifying state so the assistant stops talking and the speaker is
-    // reserved for music. This mirrors the notification playback flow.
-    if (app.GetDeviceState() != kDeviceStateIdle) {
-        app.AbortSpeaking(kAbortReasonWakeWordDetected);
-        vTaskDelay(pdMS_TO_TICKS(200));
-    }
-    if (!app.SetDeviceState(kDeviceStateNotifying)) {
-        ESP_LOGW(TAG, "Cannot enter notifying state, state=%d", app.GetDeviceState());
-    }
+    // Stop the assistant's TTS so the speaker is free for music. AbortSpeaking
+    // is safe from this task. Give the in-flight TTS a moment to drain before
+    // we start writing PCM to the I2S output directly.
+    app.AbortSpeaking(kAbortReasonWakeWordDetected);
+    vTaskDelay(pdMS_TO_TICKS(1500));
 
     std::string mp3_url, title;
     bool success = false;
     if (SearchSong(query, mp3_url, title)) {
         ESP_LOGI(TAG, "Playing: %s -> %s", title.c_str(), mp3_url.c_str());
         success = DownloadAndPlay(mp3_url);
+    } else {
+        ESP_LOGW(TAG, "No playable song found for: %s", query.c_str());
     }
-
-    // Restore to idle so voice interaction resumes.
-    app.Schedule([success, title]() {
-        auto& a = Application::GetInstance();
-        if (a.GetDeviceState() == kDeviceStateNotifying) {
-            a.SetDeviceState(kDeviceStateIdle);
-        }
-        ESP_LOGI(TAG, "Music playback %s: %s", success ? "ok" : "failed", title.c_str());
-    });
+    ESP_LOGI(TAG, "Music playback %s: %s", success ? "ok" : "failed", title.c_str());
 }
