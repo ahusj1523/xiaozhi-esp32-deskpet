@@ -332,6 +332,8 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
     bool ok = true;
     int frames_decoded = 0;
     int decode_errors = 0;
+    size_t total_read = 0;
+    int read_calls = 0;
 
     while (!cancelled_.load()) {
         // Append fresh bytes after whatever the parser left unconsumed.
@@ -340,12 +342,21 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
             auto got = http->Read(reinterpret_cast<char*>(in_buf + buffered),
                                   std::min(kReadChunk, kInBufSize - buffered));
             if (!got) {
-                ESP_LOGE(TAG, "MP3 read failed: %s", got.error().ToString().c_str());
+                ESP_LOGE(TAG, "MP3 read failed after %u bytes: %s",
+                         (unsigned)total_read, got.error().ToString().c_str());
                 ok = false;
                 break;
             }
-            if (*got == 0) break;  // clean EOF
+            if (*got == 0) {
+                ESP_LOGW(TAG, "MP3 EOF after %u bytes", (unsigned)total_read);
+                break;  // clean EOF
+            }
             buffered += *got;
+            total_read += *got;
+            if (++read_calls <= 6 || read_calls % 20 == 0) {
+                ESP_LOGI(TAG, "MP3 read #%d: +%u (total %u)", read_calls,
+                         (unsigned)*got, (unsigned)total_read);
+            }
         }
 
         esp_audio_simple_dec_raw_t raw = {};
@@ -393,7 +404,16 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
                 continue;
             }
             decode_errors = 0;
-            if (frame.decoded_size == 0) continue;  // data cached, need more
+            if (frame.decoded_size == 0) {
+                // Parser cached the bytes but emitted no PCM yet. If it also
+                // reported no consumption, advance one byte to avoid spinning
+                // on identical input (guard would otherwise waste 256 loops).
+                if (used == 0 && raw.len > 0) {
+                    raw.buffer += 1;
+                    raw.len -= 1;
+                }
+                continue;
+            }
             ++frames_decoded;
 
             if (detected_rate == 0) {
@@ -436,7 +456,8 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
             buffered -= 1024;
         }
     }
-    ESP_LOGI(TAG, "Decoded %d frames", frames_decoded);
+    ESP_LOGI(TAG, "Decoded %d frames from %u bytes (%d reads)", frames_decoded,
+             (unsigned)total_read, read_calls);
 
     esp_audio_simple_dec_close(dec);
     http->Close();
