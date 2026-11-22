@@ -5,6 +5,7 @@
 #include "display/lcd_display.h"
 #include "led/single_led.h"
 #include "mcp_server.h"
+#include "music_player.h"
 #include "pixel_robot_display.h"
 #include "wifi_board.h"
 
@@ -197,6 +198,26 @@ private:
                                EnterWifiConfigMode();
                                return true;
                            });
+        // Online music: search a song by name and play it through the speaker.
+        // The device does the search + playback itself, no server music feature needed.
+        mcp_server.AddTool(
+            "self.music.play",
+            "Search and play a song online through the device speaker. "
+            "Use this whenever the user asks to play music, a song, or a singer, "
+            "for example \"播放晴天\", \"放一首周杰伦的歌\", \"我想听音乐\". "
+            "Pass the song name or singer name in the 'query' argument. "
+            "Only free songs can be played; VIP/paid songs may be unavailable.",
+            PropertyList({Property("query", kPropertyTypeString).SetMaxLength(64)}),
+            [](const PropertyList& properties) -> ToolResult {
+                auto query = properties["query"].value<std::string>();
+                if (query.empty()) {
+                    return std::unexpected("缺少歌曲名");
+                }
+                if (!MusicPlayer::GetInstance().Play(query)) {
+                    return std::unexpected("正在播放其它音乐，请稍后再试");
+                }
+                return std::string("正在为你播放：" + query);
+            });
 #if CONFIG_WEATHER_DASHBOARD
         mcp_server.AddTool(
             "self.system.set_weather_api_key",
