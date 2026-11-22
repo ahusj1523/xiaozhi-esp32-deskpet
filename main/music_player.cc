@@ -9,8 +9,7 @@
 #include <cJSON.h>
 #include <esp_log.h>
 #include <esp_audio_dec.h>
-#include <esp_audio_simple_dec.h>
-#include <esp_audio_simple_dec_default.h>
+#include <decoder/impl/esp_mp3_dec.h>
 
 #include "application.h"
 #include "board.h"
@@ -297,18 +296,14 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
     int out_rate = codec->output_sample_rate();
     if (out_rate <= 0) out_rate = 24000;
 
-    // Use Espressif's SIMPLE decoder: it has a built-in stream parser that
-    // skips ID3 tags and finds MP3 frame boundaries for us, and accepts input
-    // of any size. The raw frame decoder (esp_mp3_dec_decode) could not cope
-    // with NetEase CDN streams and produced endless "Not supported format".
-    esp_audio_simple_dec_register_default();
-    esp_audio_simple_dec_cfg_t dec_cfg = {};
-    dec_cfg.dec_type = ESP_AUDIO_SIMPLE_DEC_TYPE_MP3;
-    dec_cfg.use_frame_dec = false;  // let the parser find frames
-    esp_audio_simple_dec_handle_t dec = nullptr;
-    esp_audio_err_t derr = esp_audio_simple_dec_open(&dec_cfg, &dec);
+    // Use the raw MP3 frame decoder (esp_mp3_dec). CONFIG_AUDIO_DECODER_MP3_SUPPORT=y
+    // registers it in the decoder table, so it works without extra setup.
+    // The alternative simple decoder is NOT compiled into this firmware
+    // ("Decoder MP3 not registered"), so we must use the frame decoder here.
+    void* dec = nullptr;
+    esp_audio_err_t derr = esp_mp3_dec_open(nullptr, 0, &dec);
     if (derr != ESP_AUDIO_ERR_OK || !dec) {
-        ESP_LOGE(TAG, "simple mp3 decoder open failed: %d", derr);
+        ESP_LOGE(TAG, "mp3 decoder open failed: %d", derr);
         return false;
     }
 
@@ -359,41 +354,38 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
             }
         }
 
-        esp_audio_simple_dec_raw_t raw = {};
+        esp_audio_dec_in_raw_t raw = {};
         raw.buffer = in_buf;
         raw.len = static_cast<uint32_t>(buffered);
-        raw.eos = false;
 
         int guard = 0;
         bool abort_track = false;
         while (raw.len > 0 && guard++ < 256 && !cancelled_.load()) {
-            esp_audio_simple_dec_out_t frame = {};
+            esp_audio_dec_out_frame_t frame = {};
             frame.buffer = out_buf_vec.data();
             frame.len = static_cast<uint32_t>(out_buf_vec.size());
-            esp_audio_err_t r = esp_audio_simple_dec_process(dec, &raw, &frame);
+            esp_audio_dec_info_t info = {};
+            esp_audio_err_t r = esp_mp3_dec_decode(dec, &raw, &frame, &info);
 
-            if (r == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH) {
-                // Grow the output buffer and retry the SAME input.
-                if (frame.needed_size > out_buf_vec.size()) {
-                    out_buf_vec.resize(frame.needed_size);
-                }
-                continue;
-            }
-            // The simple decoder consumes input internally; advance by what it
-            // reports, and skip a byte if it stalls so we never spin forever.
+            // Advance by exactly what the decoder consumed for ANY result, and
+            // skip at least one byte on errors so we never re-feed the same data.
             uint32_t used = raw.consumed;
             if (used > raw.len) used = raw.len;
             if (used > 0) {
                 raw.buffer += used;
                 raw.len -= used;
             }
+            if (r == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH || r == ESP_AUDIO_ERR_DATA_LACK ||
+                r == ESP_AUDIO_ERR_CONTINUE) {
+                break;  // keep the tail; next HTTP chunk appends to it
+            }
             if (r != ESP_AUDIO_ERR_OK) {
-                if (used == 0) {
+                if (used == 0 && raw.len > 0) {
                     raw.buffer += 1;
                     raw.len -= 1;
                 }
                 if (++decode_errors <= 4) {
-                    ESP_LOGW(TAG, "simple decode error %d (skip)", (int)r);
+                    ESP_LOGW(TAG, "MP3 decode error %d (skip)", (int)r);
                 }
                 if (decode_errors > 64) {
                     ESP_LOGE(TAG, "Too many decode errors, aborting track");
@@ -405,9 +397,6 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
             }
             decode_errors = 0;
             if (frame.decoded_size == 0) {
-                // Parser cached the bytes but emitted no PCM yet. If it also
-                // reported no consumption, advance one byte to avoid spinning
-                // on identical input (guard would otherwise waste 256 loops).
                 if (used == 0 && raw.len > 0) {
                     raw.buffer += 1;
                     raw.len -= 1;
@@ -416,15 +405,11 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
             }
             ++frames_decoded;
 
-            if (detected_rate == 0) {
-                esp_audio_simple_dec_info_t info = {};
-                if (esp_audio_simple_dec_get_info(dec, &info) == ESP_AUDIO_ERR_OK &&
-                    info.sample_rate > 0) {
-                    detected_rate = static_cast<int>(info.sample_rate);
-                    detected_channels = info.channel > 0 ? info.channel : 1;
-                    ESP_LOGI(TAG, "MP3 %d Hz, %d ch -> out %d Hz", detected_rate,
-                             detected_channels, out_rate);
-                }
+            if (detected_rate == 0 && info.sample_rate > 0) {
+                detected_rate = static_cast<int>(info.sample_rate);
+                detected_channels = info.channel > 0 ? info.channel : 1;
+                ESP_LOGI(TAG, "MP3 %d Hz, %d ch -> out %d Hz", detected_rate,
+                         detected_channels, out_rate);
             }
             int rate = detected_rate > 0 ? detected_rate : 44100;
             int ch = detected_channels > 0 ? detected_channels : 2;
@@ -459,7 +444,7 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
     ESP_LOGI(TAG, "Decoded %d frames from %u bytes (%d reads)", frames_decoded,
              (unsigned)total_read, read_calls);
 
-    esp_audio_simple_dec_close(dec);
+    esp_mp3_dec_close(dec);
     http->Close();
     ESP_LOGI(TAG, "Playback finished, played_any=%d ok=%d",
              played_any ? 1 : 0, ok ? 1 : 0);
