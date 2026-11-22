@@ -186,8 +186,8 @@ void MusicPlayer::TaskEntry(void* arg) {
     vTaskDelete(nullptr);
 }
 
-bool MusicPlayer::SearchSong(const std::string& query, std::string& mp3_url,
-                             std::string& title) {
+bool MusicPlayer::SearchSongs(const std::string& query,
+                              std::vector<SongCandidate>& out) {
     auto& board = Board::GetInstance();
     auto http = board.GetNetwork()->CreateHttp(0);
     if (!http) {
@@ -199,7 +199,7 @@ bool MusicPlayer::SearchSong(const std::string& query, std::string& mp3_url,
     http->SetHeader("Referer", "https://music.163.com");
 
     std::string url = "https://music.163.com/api/search/get/web?s=" + UrlEncode(query) +
-                      "&type=1&offset=0&limit=10";
+                      "&type=1&offset=0&limit=20";
     auto opened = http->Open("GET", url);
     if (!opened) {
         ESP_LOGE(TAG, "Search open failed: %s", opened.error().ToString().c_str());
@@ -225,11 +225,12 @@ bool MusicPlayer::SearchSong(const std::string& query, std::string& mp3_url,
         ESP_LOGE(TAG, "Search JSON parse failed");
         return false;
     }
-    bool found = false;
-    // Prefer a free (fee==0) track, but fall back to any track whose outer
-    // link may still be playable — many "VIP" tracks stream fine via the
-    // outer URL, and being too strict made popular songs (e.g. 晴天) fail.
-    std::string fallback_url, fallback_title;
+
+    // Collect free tracks first, then paid ones as fallback. A single bad
+    // link (VIP trial / m4a) used to make playback fail entirely; trying
+    // several candidates means we can skip broken streams and still play.
+    constexpr int kMaxCandidates = 6;
+    std::vector<SongCandidate> free_list, paid_list;
     cJSON* result = cJSON_GetObjectItemCaseSensitive(root, "result");
     cJSON* songs = result ? cJSON_GetObjectItemCaseSensitive(result, "songs") : nullptr;
     if (cJSON_IsArray(songs)) {
@@ -249,35 +250,32 @@ bool MusicPlayer::SearchSong(const std::string& query, std::string& mp3_url,
             // Keep the https origin: the CDN only serves the real MP3 when the
             // redirect came from https (plain http origin gets a 403). We
             // follow the https->http 302 manually in OpenFollowingRedirects.
-            std::string url = std::string("https://music.163.com/song/media/outer/url?id=") +
-                              idbuf + ".mp3";
+            std::string song_url =
+                std::string("https://music.163.com/song/media/outer/url?id=") +
+                idbuf + ".mp3";
             std::string title_str =
                 cJSON_IsString(name) && name->valuestring ? name->valuestring : "未知歌曲";
 
             bool is_free = cJSON_IsNumber(fee) && fee->valueint == 0;
-            if (is_free && !found) {
-                mp3_url = url;
-                title = title_str;
-                found = true;
-                break;
-            }
-            if (fallback_url.empty()) {
-                fallback_url = url;
-                fallback_title = title_str;
+            SongCandidate c{song_url, title_str};
+            if (is_free) {
+                if (free_list.size() < kMaxCandidates) free_list.push_back(c);
+            } else {
+                if (paid_list.size() < kMaxCandidates) paid_list.push_back(c);
             }
         }
     }
     cJSON_Delete(root);
-    if (!found && !fallback_url.empty()) {
-        mp3_url = fallback_url;
-        title = fallback_title;
-        found = true;
-        ESP_LOGI(TAG, "Using fallback (non-free) track: %s", title.c_str());
+
+    out = free_list;
+    for (auto& c : paid_list) {
+        if (out.size() >= kMaxCandidates) break;
+        out.push_back(c);
     }
-    if (!found) {
-        ESP_LOGW(TAG, "No song found for: %s", query.c_str());
-    }
-    return found;
+    ESP_LOGI(TAG, "Found %d candidates (%d free, %d paid)", (int)out.size(),
+             (int)free_list.size(), (int)paid_list.size());
+    if (out.empty()) ESP_LOGW(TAG, "No song found for: %s", query.c_str());
+    return !out.empty();
 }
 
 bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
@@ -328,7 +326,7 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
     // bytes forever, spamming "Not supported format" and hanging the task.
     // Track consecutive failures and give up cleanly after a threshold.
     int consecutive_errors = 0;
-    constexpr int kMaxConsecutiveErrors = 32;
+    constexpr int kMaxConsecutiveErrors = 16;
     int total_errors = 0;
 
     while (!cancelled_.load()) {
@@ -443,15 +441,29 @@ void MusicPlayer::Task() {
     app.AbortSpeaking(kAbortReasonWakeWordDetected);
     vTaskDelay(pdMS_TO_TICKS(1500));
 
-    std::string mp3_url, title;
+    std::vector<SongCandidate> candidates;
     bool success = false;
-    if (SearchSong(query, mp3_url, title)) {
-        ESP_LOGI(TAG, "Playing: %s -> %s", title.c_str(), mp3_url.c_str());
-        success = DownloadAndPlay(mp3_url);
+    std::string title;
+    if (SearchSongs(query, candidates)) {
+        // Try each candidate until one actually decodes and plays. Broken
+        // links (VIP trial snippets, m4a mislabeled as mp3, partial CDN
+        // responses) are skipped instead of failing the whole request.
+        for (size_t i = 0; i < candidates.size() && !cancelled_.load(); ++i) {
+            const auto& c = candidates[i];
+            ESP_LOGI(TAG, "Trying %d/%d: %s", (int)(i + 1), (int)candidates.size(),
+                     c.title.c_str());
+            if (DownloadAndPlay(c.url)) {
+                success = true;
+                title = c.title;
+                break;
+            }
+            ESP_LOGW(TAG, "Candidate failed, trying next: %s", c.title.c_str());
+        }
     } else {
         ESP_LOGW(TAG, "No playable song found for: %s", query.c_str());
     }
     // Restore low-power WiFi after playback.
     board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+    if (title.empty()) title = query;
     ESP_LOGI(TAG, "Music playback %s: %s", success ? "ok" : "failed", title.c_str());
 }
