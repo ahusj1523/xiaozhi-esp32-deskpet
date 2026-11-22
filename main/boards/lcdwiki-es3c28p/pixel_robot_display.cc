@@ -606,11 +606,13 @@ void PixelRobotDisplay::HideDashboard() {
     }
     if (state == kDeviceStateConnecting || state == kDeviceStateListening ||
         state == kDeviceStateSpeaking) {
-        // Replace the old chat-only surface with the V1.1 voice state screen.
-        // Never interrupt a deliberately opened touch player during playback.
-        if (!touch_ui_->IsPlayerVisible()) {
-            touch_ui_->ShowVoice(robot_area_, container_);
-        }
+        // Global wake-word response: whenever the device enters a voice state
+        // (e.g. "ni hao xiao zhi" detected on ANY touch page), always switch
+        // to the voice screen so the user gets a visible response. Previously
+        // an open player page suppressed this, which made wake-up look dead.
+        // Audio playback keeps running in the background; only the UI yields.
+        ESP_LOGI("ES3C28P_UI", "voice state %d: forcing voice screen", (int)state);
+        touch_ui_->ShowVoice(robot_area_, container_);
         // The media shortcut lives in the voice header so it cannot cover the status or bubbles.
         if (chat_player_button_ != nullptr) {
             lv_obj_add_flag(chat_player_button_, LV_OBJ_FLAG_HIDDEN);
