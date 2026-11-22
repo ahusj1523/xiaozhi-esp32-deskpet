@@ -224,7 +224,7 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
     }
 
     constexpr size_t kInBufSize = 4096;
-    std::array<uint8_t, kInBufSize> in_buf;
+    std::array<char, kInBufSize> in_buf;
     std::array<uint8_t, 8192> pcm_buf;  // decoded PCM scratch
     int detected_rate = 0;
     int detected_channels = 0;
@@ -241,7 +241,7 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
         if (*got == 0) break;
 
         esp_audio_dec_in_raw_t raw = {};
-        raw.buffer = in_buf.data();
+        raw.buffer = reinterpret_cast<uint8_t*>(in_buf.data());
         raw.len = static_cast<uint32_t>(*got);
 
         // Feed all input, emitting decoded PCM frames.
