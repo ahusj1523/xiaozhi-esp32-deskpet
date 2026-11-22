@@ -78,14 +78,19 @@ void ResampleToMono(const int16_t* src, size_t src_frames, int in_channels,
 
 std::unique_ptr<Http> MusicPlayer::OpenFollowingRedirects(
     const std::string& url, int timeout_ms, const std::string& accept_header) {
+    // Use ONE HttpClient for all redirect hops. Creating/destroying a client
+    // per hop (SSL transport + event group teardown) while the previous
+    // receive task winds down caused a BREAK-instr assert on https->http hops.
+    auto http = Board::GetInstance().GetNetwork()->CreateHttp(0);
+    if (!http) {
+        ESP_LOGE(TAG, "No HTTP client");
+        return nullptr;
+    }
+    http->SetTimeout(timeout_ms);
+
     std::string current = url;
     for (int hop = 0; hop <= kMaxRedirects; ++hop) {
-        auto http = Board::GetInstance().GetNetwork()->CreateHttp(0);
-        if (!http) {
-            ESP_LOGE(TAG, "No HTTP client (redirect hop %d)", hop);
-            return nullptr;
-        }
-        http->SetTimeout(timeout_ms);
+        // Open() clears per-request headers after sending, so set them each hop.
         http->SetHeader("User-Agent", "Mozilla/5.0");
         http->SetHeader("Referer", "https://music.163.com");
         if (!accept_header.empty()) {
@@ -120,11 +125,8 @@ std::unique_ptr<Http> MusicPlayer::OpenFollowingRedirects(
                 std::string origin = slash == std::string::npos
                                          ? current
                                          : current.substr(0, slash);
-                if (!location.empty() && location[0] == '/') {
-                    location = origin + location;
-                } else {
-                    location = origin + "/" + location;
-                }
+                location = (location[0] == '/') ? (origin + location)
+                                                : (origin + "/" + location);
                 ESP_LOGI(TAG, "Resolved relative redirect -> %s", location.c_str());
             }
             current = location;
@@ -141,6 +143,7 @@ std::unique_ptr<Http> MusicPlayer::OpenFollowingRedirects(
     }
 
     ESP_LOGE(TAG, "Too many redirects (>%d)", kMaxRedirects);
+    http->Close();
     return nullptr;
 }
 
@@ -160,7 +163,9 @@ bool MusicPlayer::Play(const std::string& query) {
     }
     cancelled_.store(false);
     busy_.store(true);
-    BaseType_t ok = xTaskCreate(TaskEntry, "music_play", 8192, this, 2, &task_handle_);
+    // Large stack: MP3 decode + resample use sizeable scratch buffers. 8 KB
+    // overflowed the stack and caused a Guru Meditation (BREAK instr) crash.
+    BaseType_t ok = xTaskCreate(TaskEntry, "music_play", 32768, this, 2, &task_handle_);
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "Failed to create music task");
         busy_.store(false);
@@ -305,16 +310,21 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
         codec->EnableOutput(true);
     }
 
+    // Allocate scratch on the HEAP, not the stack. Stack-allocated buffers
+    // (4 KB + 8 KB) blew the task stack even after enlarging it, and are the
+    // classic cause of the "BREAK instr" Guru Meditation during playback.
     constexpr size_t kInBufSize = 4096;
-    std::array<char, kInBufSize> in_buf;
-    std::array<uint8_t, 8192> pcm_buf;  // decoded PCM scratch
+    std::vector<char> in_buf_vec(kInBufSize);
+    std::vector<uint8_t> pcm_buf_vec(8192);
+    char* in_buf = in_buf_vec.data();
+    uint8_t* pcm_buf = pcm_buf_vec.data();
     int detected_rate = 0;
     int detected_channels = 0;
     bool played_any = false;
     bool ok = true;
 
     while (!cancelled_.load()) {
-        auto got = http->Read(in_buf.data(), in_buf.size());
+        auto got = http->Read(in_buf, kInBufSize);
         if (!got) {
             ESP_LOGE(TAG, "MP3 read failed: %s", got.error().ToString().c_str());
             ok = false;
@@ -323,15 +333,15 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
         if (*got == 0) break;
 
         esp_audio_dec_in_raw_t raw = {};
-        raw.buffer = reinterpret_cast<uint8_t*>(in_buf.data());
+        raw.buffer = reinterpret_cast<uint8_t*>(in_buf);
         raw.len = static_cast<uint32_t>(*got);
 
         // Feed all input, emitting decoded PCM frames.
         int guard = 0;
         while (raw.len > 0 && guard++ < 64 && !cancelled_.load()) {
             esp_audio_dec_out_frame_t frame = {};
-            frame.buffer = pcm_buf.data();
-            frame.len = static_cast<uint32_t>(pcm_buf.size());
+            frame.buffer = pcm_buf;
+            frame.len = static_cast<uint32_t>(pcm_buf_vec.size());
             esp_audio_dec_info_t info = {};
             esp_audio_err_t r = esp_mp3_dec_decode(dec, &raw, &frame, &info);
             if (r != ESP_AUDIO_ERR_OK) {
