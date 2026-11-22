@@ -323,6 +323,14 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
     bool played_any = false;
     bool ok = true;
 
+    // Some CDN tracks (VIP trial snippets, m4a mislabeled as mp3) fail to
+    // decode. Without forward progress the decoder is re-fed the same bad
+    // bytes forever, spamming "Not supported format" and hanging the task.
+    // Track consecutive failures and give up cleanly after a threshold.
+    int consecutive_errors = 0;
+    constexpr int kMaxConsecutiveErrors = 32;
+    int total_errors = 0;
+
     while (!cancelled_.load()) {
         auto got = http->Read(in_buf, kInBufSize);
         if (!got) {
@@ -344,12 +352,39 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
             frame.len = static_cast<uint32_t>(pcm_buf_vec.size());
             esp_audio_dec_info_t info = {};
             esp_audio_err_t r = esp_mp3_dec_decode(dec, &raw, &frame, &info);
-            if (r != ESP_AUDIO_ERR_OK) {
-                if (r == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH) break;
-                // Not enough data for a full frame yet: stop feeding this chunk.
+            if (r == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH || r == ESP_AUDIO_ERR_DATA_LACK ||
+                r == ESP_AUDIO_ERR_CONTINUE) {
+                // Need more data to complete a frame; wait for the next chunk.
                 break;
             }
-            if (frame.decoded_size == 0 || raw.consumed == 0) break;
+            if (r != ESP_AUDIO_ERR_OK) {
+                // Bad frame. ALWAYS advance at least one byte so we never get
+                // stuck re-decoding the same bytes.
+                if (raw.consumed > 0 && raw.consumed <= raw.len) {
+                    raw.buffer += raw.consumed;
+                    raw.len -= raw.consumed;
+                } else {
+                    raw.buffer += 1;
+                    raw.len -= 1;
+                }
+                if (++total_errors <= 3) {
+                    ESP_LOGW(TAG, "MP3 decode error %d (skipping)", (int)r);
+                }
+                if (++consecutive_errors >= kMaxConsecutiveErrors) {
+                    ESP_LOGE(TAG, "Too many decode errors (%d), aborting this track",
+                             consecutive_errors);
+                    ok = false;
+                    break;
+                }
+                continue;
+            }
+            // A successful decode resets the consecutive-failure counter.
+            consecutive_errors = 0;
+            if (frame.decoded_size == 0 || raw.consumed == 0) {
+                raw.buffer += (raw.consumed > 0 ? raw.consumed : 1);
+                raw.len -= (raw.consumed > 0 ? raw.consumed : 1);
+                break;
+            }
 
             if (detected_rate == 0 && info.sample_rate > 0) {
                 detected_rate = static_cast<int>(info.sample_rate);
@@ -376,11 +411,13 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
             raw.buffer += raw.consumed;
             raw.len -= raw.consumed;
         }
+        if (consecutive_errors >= kMaxConsecutiveErrors) break;
     }
 
     esp_mp3_dec_close(dec);
     http->Close();
-    ESP_LOGI(TAG, "Playback finished, played_any=%d ok=%d", played_any ? 1 : 0, ok ? 1 : 0);
+    ESP_LOGI(TAG, "Playback finished, played_any=%d ok=%d errors=%d",
+             played_any ? 1 : 0, ok ? 1 : 0, total_errors);
     return played_any && ok && !cancelled_.load();
 }
 
@@ -393,6 +430,12 @@ void MusicPlayer::Task() {
     ESP_LOGI(TAG, "Play request: %s", query.c_str());
 
     auto& app = Application::GetInstance();
+    auto& board = Board::GetInstance();
+
+    // Streaming MP3 needs a stable WiFi link. LOW_POWER (MAX_MODEM) can drop
+    // the connection mid-stream -> "Server disconnected" -> audio cuts out.
+    // Lock WiFi to full performance while music plays, restore afterwards.
+    board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
 
     // Stop the assistant's TTS so the speaker is free for music. AbortSpeaking
     // is safe from this task. Give the in-flight TTS a moment to drain before
@@ -408,5 +451,7 @@ void MusicPlayer::Task() {
     } else {
         ESP_LOGW(TAG, "No playable song found for: %s", query.c_str());
     }
+    // Restore low-power WiFi after playback.
+    board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
     ESP_LOGI(TAG, "Music playback %s: %s", success ? "ok" : "failed", title.c_str());
 }
