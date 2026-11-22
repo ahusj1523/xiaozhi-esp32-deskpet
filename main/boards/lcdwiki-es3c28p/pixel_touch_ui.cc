@@ -1834,6 +1834,25 @@ void PixelTouchUI::NavigateCalendarMonth(int delta) {
 
 void PixelTouchUI::Refresh() {
     if (lv_obj_has_flag(root_, LV_OBJ_FLAG_HIDDEN)) return;
+
+    // Global wake-word guarantee: if the device is in a voice state while the
+    // user is on another page (player / calendar / settings), bring the voice
+    // screen forward so "ni hao xiao zhi" visibly responds on EVERY page.
+    // robot_area_ / chat_container_ are kept valid by every Show* call.
+    {
+        auto st = Application::GetInstance().GetDeviceState();
+        // Only Connecting/Listening mark an actual wake-up invocation.
+        // Speaking alone can mean background music playback, which must not
+        // hijack the player page.
+        bool invoking = st == kDeviceStateConnecting || st == kDeviceStateListening;
+        if (invoking && page_ != Page::Voice && robot_area_ != nullptr &&
+            chat_container_ != nullptr) {
+            ESP_LOGI("ES3C28P_UI", "wake guard: state=%d page=%d -> voice",
+                     (int)st, (int)page_);
+            ShowVoice(robot_area_, chat_container_);
+        }
+    }
+
     // If the user opened calendar before SNTP, rebuild the month once
     // the clock is ready. A failed first read must not leave an empty page.
     if (page_ == Page::Calendar && calendar_year_ == 0) {
