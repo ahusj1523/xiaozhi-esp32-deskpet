@@ -6,8 +6,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
+
+class Http;
 
 // Lightweight online music player for the ES3C28P desk-pet firmware.
 //
@@ -42,6 +45,13 @@ private:
     bool SearchSong(const std::string& query, std::string& mp3_url, std::string& title);
     // Downloads mp3 from url, decodes and plays. Returns true on success.
     bool DownloadAndPlay(const std::string& mp3_url);
+
+    // Open an HTTP(S) GET request, following up to kMaxRedirects 3xx redirects
+    // manually (the HttpClient does not follow them itself, and refuses
+    // https->http downgrades). On success the returned client is ready to Read.
+    static constexpr int kMaxRedirects = 5;
+    std::unique_ptr<Http> OpenFollowingRedirects(const std::string& url,
+                                int timeout_ms, const std::string& accept_header);
 
     std::atomic<bool> busy_{false};
     std::atomic<bool> cancelled_{false};
