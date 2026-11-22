@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 class Http;
 
@@ -41,9 +42,16 @@ private:
     static void TaskEntry(void* arg);
     void Task();
 
-    // Returns true and fills mp3_url/title on success.
-    bool SearchSong(const std::string& query, std::string& mp3_url, std::string& title);
-    // Downloads mp3 from url, decodes and plays. Returns true on success.
+    // A playable candidate: CDN mp3 outer url + display title.
+    struct SongCandidate {
+        std::string url;
+        std::string title;
+    };
+    // Collect up to kMaxCandidates songs (free first, then paid as fallback).
+    // Returns true if at least one candidate was found.
+    bool SearchSongs(const std::string& query, std::vector<SongCandidate>& out);
+    // Downloads mp3 from url, decodes and plays. Returns true only if a
+    // meaningful amount of audio was decoded without fatal errors.
     bool DownloadAndPlay(const std::string& mp3_url);
 
     // Open an HTTP(S) GET request, following up to kMaxRedirects 3xx redirects
