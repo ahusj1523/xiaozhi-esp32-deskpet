@@ -311,78 +311,95 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
     // Allocate scratch on the HEAP, not the stack. Stack-allocated buffers
     // (4 KB + 8 KB) blew the task stack even after enlarging it, and are the
     // classic cause of the "BREAK instr" Guru Meditation during playback.
-    constexpr size_t kInBufSize = 4096;
-    std::vector<char> in_buf_vec(kInBufSize);
-    std::vector<uint8_t> pcm_buf_vec(8192);
-    char* in_buf = in_buf_vec.data();
+    //
+    // IMPORTANT: MP3 frames straddle HTTP read boundaries. When the decoder
+    // returns DATA_LACK/CONTINUE it has NOT consumed the remaining bytes. Those
+    // bytes must be carried over and prefixed to the next chunk. The old code
+    // overwrote the buffer with fresh bytes instead, so every frame after the
+    // first boundary was garbage -> endless "Not supported format".
+    constexpr size_t kReadChunk = 4096;
+    constexpr size_t kInBufSize = 16384;
+    std::vector<uint8_t> in_buf_vec(kInBufSize);
+    std::vector<uint8_t> pcm_buf_vec(32768);
+    uint8_t* in_buf = in_buf_vec.data();
     uint8_t* pcm_buf = pcm_buf_vec.data();
+    size_t buffered = 0;  // valid bytes at the FRONT of in_buf
     int detected_rate = 0;
     int detected_channels = 0;
     bool played_any = false;
     bool ok = true;
 
-    // Some CDN tracks (VIP trial snippets, m4a mislabeled as mp3) fail to
-    // decode. Without forward progress the decoder is re-fed the same bad
-    // bytes forever, spamming "Not supported format" and hanging the task.
-    // Track consecutive failures and give up cleanly after a threshold.
+    // A genuinely bad track (VIP trial / m4a mislabeled as mp3) is abandoned
+    // after a number of consecutive failures so we can try the next candidate.
     int consecutive_errors = 0;
-    constexpr int kMaxConsecutiveErrors = 16;
+    constexpr int kMaxConsecutiveErrors = 24;
     int total_errors = 0;
+    int frames_decoded = 0;
 
     while (!cancelled_.load()) {
-        auto got = http->Read(in_buf, kInBufSize);
-        if (!got) {
-            ESP_LOGE(TAG, "MP3 read failed: %s", got.error().ToString().c_str());
-            ok = false;
-            break;
+        // Append fresh bytes after whatever the decoder left unconsumed.
+        if (kInBufSize - buffered >= 512) {
+            auto got = http->Read(reinterpret_cast<char*>(in_buf + buffered),
+                                  std::min(kReadChunk, kInBufSize - buffered));
+            if (!got) {
+                ESP_LOGE(TAG, "MP3 read failed: %s", got.error().ToString().c_str());
+                ok = false;
+                break;
+            }
+            if (*got == 0) break;  // clean EOF
+            buffered += *got;
         }
-        if (*got == 0) break;
 
         esp_audio_dec_in_raw_t raw = {};
-        raw.buffer = reinterpret_cast<uint8_t*>(in_buf);
-        raw.len = static_cast<uint32_t>(*got);
+        raw.buffer = in_buf;
+        raw.len = static_cast<uint32_t>(buffered);
 
-        // Feed all input, emitting decoded PCM frames.
         int guard = 0;
-        while (raw.len > 0 && guard++ < 64 && !cancelled_.load()) {
+        bool abort_track = false;
+        while (raw.len > 0 && guard++ < 256 && !cancelled_.load()) {
             esp_audio_dec_out_frame_t frame = {};
             frame.buffer = pcm_buf;
             frame.len = static_cast<uint32_t>(pcm_buf_vec.size());
             esp_audio_dec_info_t info = {};
             esp_audio_err_t r = esp_mp3_dec_decode(dec, &raw, &frame, &info);
-            if (r == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH || r == ESP_AUDIO_ERR_DATA_LACK ||
-                r == ESP_AUDIO_ERR_CONTINUE) {
-                // Need more data to complete a frame; wait for the next chunk.
-                break;
+
+            // Advance by exactly what the decoder consumed for ANY result.
+            uint32_t used = raw.consumed;
+            if (used > raw.len) used = raw.len;
+            if (used > 0) {
+                raw.buffer += used;
+                raw.len -= used;
+            }
+
+            if (r == ESP_AUDIO_ERR_DATA_LACK || r == ESP_AUDIO_ERR_CONTINUE ||
+                r == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH) {
+                break;  // keep the tail; next HTTP chunk will be appended to it
+            }
+            if (r == static_cast<esp_audio_err_t>(-7)) {
+                // END_OF_INFO: ID3/meta parsed, not an audio error.
+                continue;
             }
             if (r != ESP_AUDIO_ERR_OK) {
-                // Bad frame. ALWAYS advance at least one byte so we never get
-                // stuck re-decoding the same bytes.
-                if (raw.consumed > 0 && raw.consumed <= raw.len) {
-                    raw.buffer += raw.consumed;
-                    raw.len -= raw.consumed;
-                } else {
+                if (used == 0) {
+                    // No progress at all: skip one byte so we cannot spin.
                     raw.buffer += 1;
                     raw.len -= 1;
                 }
-                if (++total_errors <= 3) {
+                if (++total_errors <= 4) {
                     ESP_LOGW(TAG, "MP3 decode error %d (skipping)", (int)r);
                 }
                 if (++consecutive_errors >= kMaxConsecutiveErrors) {
                     ESP_LOGE(TAG, "Too many decode errors (%d), aborting this track",
                              consecutive_errors);
                     ok = false;
+                    abort_track = true;
                     break;
                 }
                 continue;
             }
-            // A successful decode resets the consecutive-failure counter.
-            consecutive_errors = 0;
-            if (frame.decoded_size == 0 || raw.consumed == 0) {
-                raw.buffer += (raw.consumed > 0 ? raw.consumed : 1);
-                raw.len -= (raw.consumed > 0 ? raw.consumed : 1);
-                break;
-            }
+            consecutive_errors = 0;  // a good frame resets the failure run
+            if (frame.decoded_size == 0) continue;
+            ++frames_decoded;
 
             if (detected_rate == 0 && info.sample_rate > 0) {
                 detected_rate = static_cast<int>(info.sample_rate);
@@ -406,11 +423,23 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
                 codec->OutputData(pcm_out);
                 played_any = true;
             }
-            raw.buffer += raw.consumed;
-            raw.len -= raw.consumed;
         }
+
+        // Carry the undecoded tail forward into the next read.
+        buffered = raw.len;
+        if (buffered > 0 && raw.buffer != in_buf) {
+            memmove(in_buf, raw.buffer, buffered);
+        }
+        if (abort_track) break;
         if (consecutive_errors >= kMaxConsecutiveErrors) break;
+        // Defensive: if the decoder cannot progress but the buffer is full,
+        // drop the oldest 1 KB to make room (should never happen for MP3).
+        if (buffered >= kInBufSize) {
+            memmove(in_buf, in_buf + 1024, buffered - 1024);
+            buffered -= 1024;
+        }
     }
+    ESP_LOGI(TAG, "Decoded %d frames, %d bad bytes", frames_decoded, total_errors);
 
     esp_mp3_dec_close(dec);
     http->Close();
