@@ -387,8 +387,12 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
                 if (++decode_errors <= 4) {
                     ESP_LOGW(TAG, "MP3 decode error %d (skip)", (int)r);
                 }
-                if (decode_errors > 64) {
-                    ESP_LOGE(TAG, "Too many decode errors, aborting track");
+                // Only give up on a stream that has NEVER produced a frame.
+                // The raw MP3 decoder legitimately reports -1/-7 for ID3 tags
+                // and junk bytes; once real frames flow, those are harmless.
+                if (frames_decoded == 0 && decode_errors > 400) {
+                    ESP_LOGE(TAG, "No frame after %d errors, aborting track",
+                             decode_errors);
                     ok = false;
                     abort_track = true;
                     break;
@@ -446,9 +450,12 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
 
     esp_mp3_dec_close(dec);
     http->Close();
-    ESP_LOGI(TAG, "Playback finished, played_any=%d ok=%d",
-             played_any ? 1 : 0, ok ? 1 : 0);
-    return played_any && ok && !cancelled_.load();
+    // Success = we actually emitted a meaningful amount of audio. Skip/junk
+    // errors along the way are irrelevant as long as frames kept coming.
+    bool success = played_any && frames_decoded >= 20 && ok && !cancelled_.load();
+    ESP_LOGI(TAG, "Playback finished, played_any=%d frames=%d ok=%d success=%d",
+             played_any ? 1 : 0, frames_decoded, ok ? 1 : 0, success ? 1 : 0);
+    return success;
 }
 
 void MusicPlayer::Task() {
