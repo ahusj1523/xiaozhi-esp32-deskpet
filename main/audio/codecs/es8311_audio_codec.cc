@@ -16,7 +16,12 @@ Es8311AudioCodec::Es8311AudioCodec(void* i2c_master_handle, i2c_port_t i2c_port,
     output_sample_rate_ = output_sample_rate;
     pa_pin_ = pa_pin;
     pa_inverted_ = pa_inverted;
-    input_gain_ = 30;
+    // Raised from 30 to 40 dB: this board has no AEC and only one mic, so
+    // far-field wake-up confidence was marginal (measured prob 0.1226 vs a
+    // 0.12 threshold). More mic gain improves SNR instead of just relaxing
+    // the detector threshold. Music playback ducks the speaker volume, which
+    // offsets the extra gain picking up more speaker bleed.
+    input_gain_ = 40;
 
     assert(input_sample_rate_ == output_sample_rate_);
     CreateDuplexChannels(mclk, bclk, ws, dout, din);
