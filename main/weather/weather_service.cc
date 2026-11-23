@@ -5,6 +5,7 @@
 #include "weather_city_store.h"
 #include "weather_parsers.h"
 
+#include <cJSON.h>
 #include <esp_log.h>
 
 #include <cstdio>
@@ -198,9 +199,65 @@ void WeatherService::TaskLoop() {
 
         std::string key = key_store_.GetKey();
         if (key.empty()) {
-            WeatherSnapshot no_key_snapshot;
-            no_key_snapshot.no_key = true;
-            publish_unavailable(no_key_snapshot);  // UI shows "天气未配置"
+            // 没有和风天气 key 时走免 key 的公共接口（城市代码 101240607 = 江西永新），
+            // 这样主页不用先申请 key 也能显示温度/湿度/天气。
+            bool published = false;
+            auto free_resp = HttpGet(
+                "http://t.weather.itboy.net/api/weather/city/101240607", 6000);
+            if (free_resp.status == 200 && !free_resp.body.empty()) {
+                cJSON* root = cJSON_Parse(free_resp.body.c_str());
+                if (root != nullptr) {
+                    cJSON* data = cJSON_GetObjectItem(root, "data");
+                    if (cJSON_IsObject(data)) {
+                        WeatherSnapshot snapshot;
+                        snapshot.valid = true;
+                        snapshot.city = "永新";
+                        cJSON* city_info = cJSON_GetObjectItem(root, "cityInfo");
+                        if (cJSON_IsObject(city_info)) {
+                            cJSON* city = cJSON_GetObjectItem(city_info, "city");
+                            if (cJSON_IsString(city) && city->valuestring != nullptr &&
+                                city->valuestring[0] != '\0') {
+                                snapshot.city = city->valuestring;
+                            }
+                        }
+                        cJSON* wendu = cJSON_GetObjectItem(data, "wendu");
+                        if (cJSON_IsString(wendu) && wendu->valuestring != nullptr) {
+                            snapshot.temperature = atoi(wendu->valuestring);
+                        }
+                        cJSON* shidu = cJSON_GetObjectItem(data, "shidu");
+                        if (cJSON_IsString(shidu) && shidu->valuestring != nullptr) {
+                            snapshot.humidity = atoi(shidu->valuestring);
+                        }
+                        cJSON* pm25 = cJSON_GetObjectItem(data, "pm25");
+                        if (cJSON_IsNumber(pm25)) {
+                            snapshot.aqi = static_cast<int>(pm25->valuedouble);
+                        }
+                        cJSON* forecast = cJSON_GetObjectItem(data, "forecast");
+                        if (cJSON_IsArray(forecast)) {
+                            cJSON* today = cJSON_GetArrayItem(forecast, 0);
+                            if (cJSON_IsObject(today)) {
+                                cJSON* type = cJSON_GetObjectItem(today, "type");
+                                if (cJSON_IsString(type) && type->valuestring != nullptr) {
+                                    snapshot.weather_text = type->valuestring;
+                                }
+                            }
+                        }
+                        snapshot.updated_at = time(nullptr);
+                        Publish(snapshot);
+                        have_last_unavailable = false;
+                        published = true;
+                        ESP_LOGI(TAG, "Weather from free feed: %s, %dC, %d%%",
+                                 snapshot.weather_text.c_str(), snapshot.temperature,
+                                 snapshot.humidity);
+                    }
+                    cJSON_Delete(root);
+                }
+            }
+            if (!published) {
+                WeatherSnapshot no_key_snapshot;
+                no_key_snapshot.no_key = true;
+                publish_unavailable(no_key_snapshot);  // UI shows "天气未配置"
+            }
             wait(kRetryIntervalMs);
             continue;
         }
