@@ -218,6 +218,55 @@ private:
                 }
                 return std::string("正在为你播放：" + query);
             });
+
+        // Pause / resume / stop the currently playing song. Without these the
+        // assistant has no way to honor "暂停音乐" / "继续播放" / "停止播放".
+        mcp_server.AddTool(
+            "self.music.pause",
+            "Pause the music currently playing through the device speaker. "
+            "Use this whenever the user says \"暂停音乐\", \"暂停播放\", \"停一下\", "
+            "\"先别放了\", \"pause the music\". No arguments needed.",
+            PropertyList(),
+            [](const PropertyList&) -> ToolResult {
+                auto& player = MusicPlayer::GetInstance();
+                if (!player.IsBusy()) {
+                    return std::unexpected("当前没有在播放音乐");
+                }
+                if (player.IsPaused()) {
+                    return std::string("音乐已经暂停了");
+                }
+                player.Pause();
+                return std::string("已暂停音乐，说继续播放可以接着听");
+            });
+
+        mcp_server.AddTool(
+            "self.music.resume",
+            "Resume the paused music. Use when the user says \"继续播放\", "
+            "\"接着放\", \"继续听\", \"resume the music\". No arguments needed.",
+            PropertyList(),
+            [](const PropertyList&) -> ToolResult {
+                auto& player = MusicPlayer::GetInstance();
+                if (!player.IsBusy() || !player.IsPaused()) {
+                    return std::unexpected("当前没有暂停的音乐");
+                }
+                player.Resume();
+                return std::string("继续播放音乐");
+            });
+
+        mcp_server.AddTool(
+            "self.music.stop",
+            "Stop the current music playback completely. Use when the user says "
+            "\"停止音乐\", \"别放了\", \"关掉音乐\", \"stop the music\". "
+            "No arguments needed.",
+            PropertyList(),
+            [](const PropertyList&) -> ToolResult {
+                auto& player = MusicPlayer::GetInstance();
+                if (!player.IsBusy()) {
+                    return std::unexpected("当前没有在播放音乐");
+                }
+                player.Stop();
+                return std::string("已停止音乐");
+            });
 #if CONFIG_WEATHER_DASHBOARD
         mcp_server.AddTool(
             "self.system.set_weather_api_key",
