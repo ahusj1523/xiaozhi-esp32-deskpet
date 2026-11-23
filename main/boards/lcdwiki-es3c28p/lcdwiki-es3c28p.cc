@@ -27,7 +27,8 @@
 #include <driver/spi_common.h>
 #include <driver/usb_serial_jtag.h>
 #include <driver/usb_serial_jtag_vfs.h>
-#include <esp_console.h>#include <esp_lcd_panel_io.h>
+#include <esp_console.h>
+#include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_lcd_touch_ft5x06.h>
