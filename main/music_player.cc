@@ -367,6 +367,8 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
     size_t total_read = 0;
     int read_calls = 0;
 
+    bool held_for_assistant = false;
+
     while (!cancelled_.load()) {
         // Pause: stop feeding the decoder and the speaker, but keep the HTTP
         // connection open and the undecoded bytes in `in_buf`. When resumed,
@@ -375,6 +377,29 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
             vTaskDelay(pdMS_TO_TICKS(100));
         }
         if (cancelled_.load()) break;
+
+        // Music and the assistant share ONE I2S speaker path. If we keep
+        // pumping PCM while the device is connecting / listening / speaking,
+        // the two streams interleave and the reply sounds choppy ("聊天断断续续").
+        // So hold the stream (no read, no decode, no output) until the assistant
+        // goes back to idle, then continue from the exact same byte.
+        auto state = Application::GetInstance().GetDeviceState();
+        bool assistant_active = state == kDeviceStateConnecting ||
+                                state == kDeviceStateListening ||
+                                state == kDeviceStateSpeaking;
+        if (assistant_active) {
+            if (!held_for_assistant) {
+                ESP_LOGI(TAG, "Assistant active (state=%d), holding music",
+                         static_cast<int>(state));
+                held_for_assistant = true;
+            }
+            vTaskDelay(pdMS_TO_TICKS(80));
+            continue;
+        }
+        if (held_for_assistant) {
+            ESP_LOGI(TAG, "Assistant idle again, resuming music");
+            held_for_assistant = false;
+        }
 
         // Append fresh bytes after whatever the parser left unconsumed.
         // ATTENTION: never overwrite unconsumed bytes (corrupts the stream).
