@@ -330,6 +330,9 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
         ESP_LOGE(TAG, "MP3 open/redirect failed");
         return false;
     }
+    // The CDN streams a ~2 MB file over a long-lived connection; a 10 s
+    // per-read timeout was too tight and killed tracks mid-song.
+    http->SetTimeout(30000);
 
     int out_rate = codec->output_sample_rate();
     if (out_rate <= 0) out_rate = 24000;
@@ -369,6 +372,10 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
     int read_calls = 0;
 
     bool held_for_assistant = false;
+    // WiFi power save gets reset to LOW_POWER (MAX_MODEM) whenever the chat
+    // session closes (AbortSpeaking does exactly that), which makes the mp3
+    // download stall for seconds. Re-assert PERFORMANCE for the whole track.
+    TickType_t last_ps_assert = xTaskGetTickCount();
 
     while (!cancelled_.load()) {
         // Pause: stop feeding the decoder and the speaker, but keep the HTTP
@@ -400,6 +407,11 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
         if (held_for_assistant) {
             ESP_LOGI(TAG, "Assistant idle again, resuming music");
             held_for_assistant = false;
+        }
+
+        if (xTaskGetTickCount() - last_ps_assert > pdMS_TO_TICKS(2000)) {
+            Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+            last_ps_assert = xTaskGetTickCount();
         }
 
         // Append fresh bytes after whatever the parser left unconsumed.
@@ -574,6 +586,10 @@ void MusicPlayer::Task() {
     // we start writing PCM to the I2S output directly.
     app.AbortSpeaking(kAbortReasonWakeWordDetected);
     vTaskDelay(pdMS_TO_TICKS(1500));
+    // AbortSpeaking tears the chat session down and WifiStation then restores
+    // LOW_POWER (MAX_MODEM). That is what made the mp3 stream stall mid-song,
+    // so lock full performance again once the session is gone.
+    board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
 
     std::vector<SongCandidate> candidates;
     bool success = false;
