@@ -461,7 +461,7 @@ public:
         InitializeConsole();
 #endif
         GetBacklight()->RestoreBrightness();
-#if 1  // AUTO_PLAY_TEST: temporary self-test, no microphone needed
+#if 0  // AUTO_PLAY_TEST: disabled for release (was temporary self-test)
         xTaskCreate([](void*) {
                 vTaskDelay(pdMS_TO_TICKS(20000));  // let WiFi/MQTT settle
                 ESP_LOGI(TAG, "AUTO_PLAY_TEST: triggering Play(后来)");
