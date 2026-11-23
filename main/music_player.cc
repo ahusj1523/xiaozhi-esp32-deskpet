@@ -524,6 +524,20 @@ void MusicPlayer::Task() {
     auto& app = Application::GetInstance();
     auto& board = Board::GetInstance();
 
+    // This board has NO echo cancellation: ES8311 input_reference_=false and
+    // the Lite wake engine has no AEC. Speaker audio bleeds into the mic and
+    // masks "你好小智", so voice control is impossible while music plays loud.
+    // Lower the output volume during playback to give the mic some headroom,
+    // and restore it afterwards so TTS/alerts stay audible.
+    auto* music_codec = board.GetAudioCodec();
+    int saved_volume = music_codec ? music_codec->output_volume() : -1;
+    constexpr int kMusicVolume = 42;
+    if (music_codec != nullptr) {
+        ESP_LOGI(TAG, "Lowering output volume %d -> %d for voice wake-up",
+                 saved_volume, kMusicVolume);
+        music_codec->SetOutputVolume(kMusicVolume);
+    }
+
     // Streaming MP3 needs a stable WiFi link. LOW_POWER (MAX_MODEM) can drop
     // the connection mid-stream -> "Server disconnected" -> audio cuts out.
     // Lock WiFi to full performance while music plays, restore afterwards.
@@ -556,8 +570,12 @@ void MusicPlayer::Task() {
     } else {
         ESP_LOGW(TAG, "No playable song found for: %s", query.c_str());
     }
-    // Restore low-power WiFi after playback.
+    // Restore low-power WiFi and speaker volume after playback.
     board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+    if (music_codec != nullptr && saved_volume >= 0) {
+        music_codec->SetOutputVolume(saved_volume);
+        ESP_LOGI(TAG, "Restored output volume to %d", saved_volume);
+    }
     if (title.empty()) title = query;
     ESP_LOGI(TAG, "Music playback %s: %s", success ? "ok" : "failed", title.c_str());
 }
