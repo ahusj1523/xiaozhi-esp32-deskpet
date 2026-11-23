@@ -10,6 +10,11 @@ constexpr const char* kNamespace = "weather";
 constexpr const char* kKeyCity = "manual_city";
 constexpr const char* kKeyLat = "manual_lat";
 constexpr const char* kKeyLon = "manual_lon";
+// 默认城市：江西省吉安市永新县（家家旺超市所在地）。
+// 没有手工选过城市时直接用它，省掉 GeoIP 定位那一步（那一步最容易失败）。
+constexpr const char* kDefaultCity = "永新县";
+constexpr double kDefaultLat = 26.9360;
+constexpr double kDefaultLon = 114.2350;
 }  // namespace
 
 CityLocation WeatherCityStore::GetCity() const {
@@ -24,6 +29,11 @@ CityLocation WeatherCityStore::GetCity() const {
         location.city = city;
         location.lat = atof(lat_s.c_str());
         location.lon = atof(lon_s.c_str());
+    } else {
+        location.found = true;
+        location.city = kDefaultCity;
+        location.lat = kDefaultLat;
+        location.lon = kDefaultLon;
     }
     return location;
 }
