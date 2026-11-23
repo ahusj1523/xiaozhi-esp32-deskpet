@@ -7,6 +7,8 @@
 #include <vector>
 
 #include <cJSON.h>
+#include <esp_crt_bundle.h>
+#include <esp_http_client.h>
 #include <esp_log.h>
 #include <esp_audio_dec.h>
 #include <decoder/impl/esp_mp3_dec.h>
@@ -188,7 +190,9 @@ bool MusicPlayer::Play(const std::string& query) {
     busy_.store(true);
     // Large stack: MP3 decode + resample use sizeable scratch buffers. 8 KB
     // overflowed the stack and caused a Guru Meditation (BREAK instr) crash.
-    BaseType_t ok = xTaskCreate(TaskEntry, "music_play", 32768, this, 2, &task_handle_);
+    // Priority 6 (above the LVGL/UI tasks): with priority 2 the streaming loop
+    // was starved by the display refresh and the decoder underran constantly.
+    BaseType_t ok = xTaskCreate(TaskEntry, "music_play", 32768, this, 6, &task_handle_);
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "Failed to create music task");
         busy_.store(false);
@@ -324,15 +328,50 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
         return false;
     }
 
-    // Open the MP3 stream, following the NetEase 302 redirect to the CDN.
-    auto http = OpenFollowingRedirects(mp3_url, 10000, "audio/mpeg,*/*");
-    if (!http) {
-        ESP_LOGE(TAG, "MP3 open/redirect failed");
-        return false;
+    // Open the CDN stream. The board's Http wrapper returns the socket data in
+    // ~1.5 KB MSS-sized pieces, which starves the decoder on a 2 MB track.
+    // Use esp_http_client directly (8 KB receive buffer, auto redirect) so the
+    // transport layer can buffer ahead; fall back to the wrapper on failure.
+    esp_http_client_handle_t idf_cli = nullptr;
+    std::unique_ptr<Http> http;
+    {
+        esp_http_client_config_t cfg = {};
+        cfg.url = mp3_url.c_str();
+        cfg.timeout_ms = 30000;
+        cfg.buffer_size = 8192;
+        cfg.buffer_size_tx = 1024;
+        cfg.crt_bundle_attach = esp_crt_bundle_attach;
+        cfg.max_redirections = 5;
+        idf_cli = esp_http_client_init(&cfg);
+        if (idf_cli != nullptr) {
+            esp_http_client_set_header(idf_cli, "User-Agent", "Mozilla/5.0");
+            esp_http_client_set_header(idf_cli, "Referer", "https://music.163.com");
+            esp_http_client_set_header(idf_cli, "Accept", "audio/mpeg,*/*");
+            if (esp_http_client_open(idf_cli, 0) == ESP_OK) {
+                esp_http_client_fetch_headers(idf_cli);
+                int code = esp_http_client_get_status_code(idf_cli);
+                ESP_LOGI(TAG, "IDF stream open: status %d, %d bytes declared", code,
+                         esp_http_client_get_content_length(idf_cli));
+                if (code < 200 || code >= 300) {
+                    esp_http_client_close(idf_cli);
+                    esp_http_client_cleanup(idf_cli);
+                    idf_cli = nullptr;
+                }
+            } else {
+                esp_http_client_cleanup(idf_cli);
+                idf_cli = nullptr;
+            }
+        }
     }
-    // The CDN streams a ~2 MB file over a long-lived connection; a 10 s
-    // per-read timeout was too tight and killed tracks mid-song.
-    http->SetTimeout(30000);
+    if (idf_cli == nullptr) {
+        ESP_LOGW(TAG, "IDF client failed, falling back to Http wrapper");
+        http = OpenFollowingRedirects(mp3_url, 30000, "audio/mpeg,*/*");
+        if (!http) {
+            ESP_LOGE(TAG, "MP3 open/redirect failed");
+            return false;
+        }
+        http->SetTimeout(30000);
+    }
 
     int out_rate = codec->output_sample_rate();
     if (out_rate <= 0) out_rate = 24000;
@@ -345,6 +384,11 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
     esp_audio_err_t derr = esp_mp3_dec_open(nullptr, 0, &dec);
     if (derr != ESP_AUDIO_ERR_OK || !dec) {
         ESP_LOGE(TAG, "mp3 decoder open failed: %d", derr);
+        if (idf_cli != nullptr) {
+            esp_http_client_close(idf_cli);
+            esp_http_client_cleanup(idf_cli);
+        }
+        if (http) http->Close();
         return false;
     }
 
@@ -370,6 +414,7 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
     int decode_errors = 0;
     size_t total_read = 0;
     int read_calls = 0;
+    TickType_t start_tick = xTaskGetTickCount();
 
     bool held_for_assistant = false;
     // WiFi power save gets reset to LOW_POWER (MAX_MODEM) whenever the chat
@@ -417,23 +462,47 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
         // Append fresh bytes after whatever the parser left unconsumed.
         // ATTENTION: never overwrite unconsumed bytes (corrupts the stream).
         if (kInBufSize - buffered >= 512) {
-            auto got = http->Read(reinterpret_cast<char*>(in_buf + buffered),
-                                  std::min(kReadChunk, kInBufSize - buffered));
-            if (!got) {
-                ESP_LOGE(TAG, "MP3 read failed after %u bytes: %s",
-                         (unsigned)total_read, got.error().ToString().c_str());
-                ok = false;
-                break;
+            size_t want = std::min(kReadChunk, kInBufSize - buffered);
+            size_t got_bytes = 0;
+            bool read_failed = false;
+            TickType_t t_read = xTaskGetTickCount();
+            if (idf_cli != nullptr) {
+                int n = esp_http_client_read(
+                    idf_cli, reinterpret_cast<char*>(in_buf + buffered),
+                    static_cast<int>(want));
+                if (n < 0) {
+                    ESP_LOGE(TAG, "MP3 read failed after %u bytes (idf)",
+                             (unsigned)total_read);
+                    ok = false;
+                    read_failed = true;
+                } else {
+                    got_bytes = static_cast<size_t>(n);
+                }
+            } else {
+                auto got = http->Read(reinterpret_cast<char*>(in_buf + buffered), want);
+                if (!got) {
+                    ESP_LOGE(TAG, "MP3 read failed after %u bytes: %s",
+                             (unsigned)total_read, got.error().ToString().c_str());
+                    ok = false;
+                    read_failed = true;
+                } else {
+                    got_bytes = *got;
+                }
             }
-            if (*got == 0) {
+            if (read_failed) break;
+            if (got_bytes == 0) {
                 ESP_LOGW(TAG, "MP3 EOF after %u bytes", (unsigned)total_read);
                 break;  // clean EOF
             }
-            buffered += *got;
-            total_read += *got;
+            uint32_t read_ms = (xTaskGetTickCount() - t_read) * portTICK_PERIOD_MS;
+            buffered += got_bytes;
+            total_read += got_bytes;
             if (++read_calls <= 6 || read_calls % 20 == 0) {
-                ESP_LOGI(TAG, "MP3 read #%d: +%u (total %u)", read_calls,
-                         (unsigned)*got, (unsigned)total_read);
+                uint32_t total_ms = (xTaskGetTickCount() - start_tick) * portTICK_PERIOD_MS;
+                ESP_LOGI(TAG, "MP3 read #%d: +%u (total %u) %u ms, avg %u B/s",
+                         read_calls, (unsigned)got_bytes, (unsigned)total_read,
+                         (unsigned)read_ms,
+                         total_ms > 0 ? (unsigned)(total_read * 1000 / total_ms) : 0);
             }
         }
 
@@ -519,7 +588,12 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
             std::vector<int16_t> pcm_out;
             const int16_t* samples = reinterpret_cast<const int16_t*>(frame.buffer);
             size_t frames = frame.decoded_size / (2 * static_cast<size_t>(ch));
-            ResampleToMono(samples, frames, ch, rate, out_rate, pcm_out);
+            if (rate == out_rate && ch == 1) {
+                // Already the codec's format: skip the (software-float) resampler.
+                pcm_out.assign(samples, samples + frames);
+            } else {
+                ResampleToMono(samples, frames, ch, rate, out_rate, pcm_out);
+            }
             if (!pcm_out.empty()) {
                 codec->OutputData(pcm_out);
                 played_any = true;
@@ -542,7 +616,14 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
              (unsigned)total_read, read_calls);
 
     esp_mp3_dec_close(dec);
-    http->Close();
+    if (idf_cli != nullptr) {
+        esp_http_client_close(idf_cli);
+        esp_http_client_cleanup(idf_cli);
+        idf_cli = nullptr;
+    }
+    if (http) {
+        http->Close();
+    }
     // Success = we actually emitted a meaningful amount of audio. Skip/junk
     // errors along the way are irrelevant as long as frames kept coming.
     bool success = played_any && frames_decoded >= 20 && ok && !cancelled_.load();
