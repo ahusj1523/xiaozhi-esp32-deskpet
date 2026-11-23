@@ -341,7 +341,7 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
         cfg.buffer_size = 8192;
         cfg.buffer_size_tx = 1024;
         cfg.crt_bundle_attach = esp_crt_bundle_attach;
-        cfg.max_redirections = 5;
+        cfg.max_redirection_count = 5;
         idf_cli = esp_http_client_init(&cfg);
         if (idf_cli != nullptr) {
             esp_http_client_set_header(idf_cli, "User-Agent", "Mozilla/5.0");
