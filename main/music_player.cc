@@ -20,6 +20,27 @@
 
 namespace {
 
+// Find the next VALID MPEG audio frame header. We check more than the 11-bit
+// sync word so we don't jump into the middle of an ID3/APE tag that happens
+// to contain 0xFFE. Returns offset from buf, or buf_len if none found.
+size_t FindMp3Sync(const uint8_t* buf, size_t buf_len) {
+    if (buf_len < 4) return buf_len;
+    for (size_t i = 0; i + 2 < buf_len; ++i) {
+        if (buf[i] != 0xFF) continue;
+        uint8_t b1 = buf[i + 1];
+        if ((b1 & 0xE0) != 0xE0) continue;          // 11 sync bits
+        if (((b1 >> 3) & 0x03) == 0x01) continue;   // version reserved
+        if (((b1 >> 1) & 0x03) == 0x00) continue;   // layer reserved
+        uint8_t b2 = buf[i + 2];
+        int bitrate_idx = (b2 >> 4) & 0x0F;
+        int srate_idx = (b2 >> 2) & 0x03;
+        if (bitrate_idx == 0 || bitrate_idx == 15) continue;  // bad bitrate
+        if (srate_idx == 3) continue;                          // reserved rate
+        return i;
+    }
+    return buf_len;
+}
+
 // URL-encode a UTF-8 string (percent-encode all non-unreserved bytes).
 std::string UrlEncode(const std::string& in) {
     static const char* hex = "0123456789ABCDEF";
@@ -361,35 +382,38 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
         int guard = 0;
         bool abort_track = false;
         while (raw.len > 0 && guard++ < 256 && !cancelled_.load()) {
+            uint8_t* frame_start = raw.buffer;  // where this decode attempt began
             esp_audio_dec_out_frame_t frame = {};
             frame.buffer = out_buf_vec.data();
             frame.len = static_cast<uint32_t>(out_buf_vec.size());
             esp_audio_dec_info_t info = {};
             esp_audio_err_t r = esp_mp3_dec_decode(dec, &raw, &frame, &info);
 
-            // Advance by exactly what the decoder consumed for ANY result, and
-            // skip at least one byte on errors so we never re-feed the same data.
-            uint32_t used = raw.consumed;
-            if (used > raw.len) used = raw.len;
-            if (used > 0) {
-                raw.buffer += used;
-                raw.len -= used;
-            }
             if (r == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH || r == ESP_AUDIO_ERR_DATA_LACK ||
                 r == ESP_AUDIO_ERR_CONTINUE) {
-                break;  // keep the tail; next HTTP chunk appends to it
+                // Decoder needs more data; keep everything from frame_start.
+                size_t keep = static_cast<size_t>(raw.buffer - frame_start) + raw.len;
+                raw.buffer = frame_start;
+                raw.len = static_cast<uint32_t>(keep);
+                break;
             }
             if (r != ESP_AUDIO_ERR_OK) {
-                if (used == 0 && raw.len > 0) {
-                    raw.buffer += 1;
-                    raw.len -= 1;
+                // Decode failed. Search for the next valid MPEG frame header
+                // starting one byte after this attempt, then resume there.
+                uint8_t* search_from = frame_start + 1;
+                size_t search_len = (raw.buffer + raw.len) - search_from;
+                size_t off = FindMp3Sync(search_from, search_len);
+                if (off < search_len) {
+                    raw.buffer = search_from + off;
+                    raw.len = static_cast<uint32_t>(search_len - off);
+                } else {
+                    raw.buffer = frame_start;
+                    raw.len = 0;  // wait for more data
                 }
                 if (++decode_errors <= 4) {
-                    ESP_LOGW(TAG, "MP3 decode error %d (skip)", (int)r);
+                    ESP_LOGW(TAG, "MP3 decode error %d, resync +%u", (int)r,
+                             (unsigned)off);
                 }
-                // Only give up on a stream that has NEVER produced a frame.
-                // The raw MP3 decoder legitimately reports -1/-7 for ID3 tags
-                // and junk bytes; once real frames flow, those are harmless.
                 if (frames_decoded == 0 && decode_errors > 400) {
                     ESP_LOGE(TAG, "No frame after %d errors, aborting track",
                              decode_errors);
@@ -398,6 +422,13 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
                     break;
                 }
                 continue;
+            }
+            // Success: advance by what the decoder actually consumed.
+            uint32_t used = raw.consumed;
+            if (used > raw.len) used = raw.len;
+            if (used > 0) {
+                raw.buffer += used;
+                raw.len -= used;
             }
             decode_errors = 0;
             if (frame.decoded_size == 0) {
