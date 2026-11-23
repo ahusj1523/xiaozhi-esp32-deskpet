@@ -34,7 +34,7 @@ LV_FONT_DECLARE(es3c28p_ui_heading);
 #endif
 
 namespace {
-constexpr uint32_t kBg = 0x0B1B2E;
+constexpr uint32_t kBg = 0x071326;
 #if CONFIG_LCDWIKI_ES3C28P_LANDSCAPE
 extern const uint8_t kBackdropPixels[] asm("_binary_es3c28p_v11_backdrop_rgb565_start");
 const lv_image_dsc_t kPrototypeBackdrop{
@@ -47,12 +47,11 @@ const lv_image_dsc_t kPrototypeBackdrop{
     .data = kBackdropPixels,
 };
 #endif
-constexpr uint32_t kPanel = 0x16324B;
-constexpr uint32_t kBorder = 0x3D6C88;
-constexpr uint32_t kText = 0xF2FAFF;
-constexpr uint32_t kMuted = 0xBBD4E1;
-constexpr uint32_t kAccent = 0x7DE8D7;
-constexpr int kRadius = 10;
+constexpr uint32_t kPanel = 0x10263B;
+constexpr uint32_t kBorder = 0x345C74;
+constexpr uint32_t kText = 0xEBF9FE;
+constexpr uint32_t kMuted = 0xACC8D6;
+constexpr uint32_t kAccent = 0x80E9DD;
 
 int DaysInMonth(int year, int month) {
     static constexpr int lengths[12] = {31, 28, 31, 30, 31, 30,
@@ -72,35 +71,12 @@ int WeekdayOfFirst(int year, int month) {
     return value.tm_wday;
 }
 
-// Softer "glass card" look: subtle vertical gradient, hairline border and
-// rounded corners. Pure software rendering (no PSRAM), so gradients only —
-// shadows would cost too many pixels per frame.
-uint32_t Darken(uint32_t color, int percent) {
-    int r = (color >> 11) & 0x1F;
-    int g = (color >> 5) & 0x3F;
-    int b = color & 0x1F;
-    r = r * (100 - percent) / 100;
-    g = g * (100 - percent) / 100;
-    b = b * (100 - percent) / 100;
-    if (r > 0x1F) r = 0x1F;
-    if (g > 0x3F) g = 0x3F;
-    if (b > 0x1F) b = 0x1F;
-    if (r < 0) r = 0;
-    if (g < 0) g = 0;
-    if (b < 0) b = 0;
-    return (static_cast<uint32_t>(r) << 11) | (static_cast<uint32_t>(g) << 5) |
-           static_cast<uint32_t>(b);
-}
-
-void StylePanel(lv_obj_t* obj, uint32_t bg, uint32_t border, int radius = 0) {
+void StylePanel(lv_obj_t* obj, uint32_t bg, uint32_t border) {
     lv_obj_set_style_bg_color(obj, lv_color_hex(bg), 0);
     lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_grad_color(obj, lv_color_hex(Darken(bg, 22)), 0);
-    lv_obj_set_style_bg_grad_dir(obj, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_border_color(obj, lv_color_hex(border), 0);
     lv_obj_set_style_border_width(obj, 1, 0);
-    lv_obj_set_style_border_opa(obj, LV_OPA_70, 0);
-    lv_obj_set_style_radius(obj, radius, 0);
+    lv_obj_set_style_radius(obj, 0, 0);
     lv_obj_set_style_pad_all(obj, 0, 0);
     lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
 }
@@ -130,10 +106,7 @@ lv_obj_t* Button(lv_obj_t* parent, const char* text, int x, int y, int w, int h,
     lv_obj_t* button = lv_obj_create(parent);
     lv_obj_set_pos(button, x, y);
     lv_obj_set_size(button, w, h);
-    StylePanel(button, kPanel, kBorder, kRadius);
-    lv_obj_set_style_bg_color(button, lv_color_hex(Darken(kPanel, -18)),
-                              LV_STATE_PRESSED);
-    lv_obj_set_style_bg_grad_dir(button, LV_GRAD_DIR_NONE, LV_STATE_PRESSED);
+    StylePanel(button, kPanel, kBorder);
     lv_obj_add_flag(button, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(button, LV_OBJ_FLAG_GESTURE_BUBBLE);
     lv_obj_add_event_cb(button, callback, LV_EVENT_CLICKED, user_data);
@@ -698,8 +671,7 @@ void PixelTouchUI::BuildHeader(const char* title, bool back) {
     lv_obj_set_size(bar, 320, 35);
     lv_obj_set_style_border_width(bar, 1, 0);
     lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_BOTTOM, 0);
-    lv_obj_set_style_border_color(bar, lv_color_hex(kAccent), 0);
-    lv_obj_set_style_border_opa(bar, LV_OPA_30, 0);
+    lv_obj_set_style_border_color(bar, lv_color_hex(0x293b4d), 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
     if (back) {
         // Full-corner transparent hit area: top-edge taps rolled off the old
@@ -1147,7 +1119,7 @@ void PixelTouchUI::BuildCalendar() {
     const int content_width = footer_width - 2 * border;
     lv_obj_set_pos(footer, 12, footer_bottom - footer_height);
     lv_obj_set_size(footer, footer_width, footer_height);
-    StylePanel(footer, 0x1a2d44, 0x2b4660, kRadius);
+    StylePanel(footer, 0x1a2d44, 0x2b4660);
     lv_obj_set_style_radius(footer, 9, 0);
     lv_obj_add_flag(footer, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(footer, OnCalendarDetail, LV_EVENT_CLICKED, this);
@@ -1168,7 +1140,7 @@ void PixelTouchUI::BuildCalendar() {
     calendar_details_popup_ = lv_obj_create(body_);
     lv_obj_set_pos(calendar_details_popup_, 9, 60);
     lv_obj_set_size(calendar_details_popup_, 302, 173);
-    StylePanel(calendar_details_popup_, 0x1b314b, 0x42647a, kRadius);
+    StylePanel(calendar_details_popup_, 0x1b314b, 0x42647a);
     lv_obj_set_style_radius(calendar_details_popup_, 12, 0);
     calendar_date_label_ =
         Label(calendar_details_popup_, "", 16, 12, 238, 22, kText, &heading_font_);
@@ -1228,7 +1200,7 @@ void PixelTouchUI::BuildPlayer() {
     auto* cover = lv_obj_create(body_);
     lv_obj_set_pos(cover, 21, 48);
     lv_obj_set_size(cover, 77, 77);
-    StylePanel(cover, player_song_mode_ ? 0xbd8dba : 0x719b8c, 0, 8);
+    StylePanel(cover, player_song_mode_ ? 0xbd8dba : 0x719b8c, 0);
     lv_obj_set_style_border_width(cover, 0, 0);
     lv_obj_set_style_radius(cover, 14, 0);
     lv_obj_set_style_bg_grad_color(cover, lv_color_hex(player_song_mode_ ? 0x393d75 : 0x1b4359), 0);
@@ -1317,7 +1289,7 @@ void PixelTouchUI::BuildPlayer() {
     player_volume_popup_ = lv_obj_create(body_);
     lv_obj_set_pos(player_volume_popup_, 91, 37);
     lv_obj_set_size(player_volume_popup_, 220, 47);
-    StylePanel(player_volume_popup_, 0x20364d, 0x35556b, kRadius);
+    StylePanel(player_volume_popup_, 0x20364d, 0x35556b);
     lv_obj_set_style_radius(player_volume_popup_, 10, 0);
     Label(player_volume_popup_, "音量", 10, 13, 35, 18, kText, &muted_font_);
     player_volume_slider_ = CompactSlider(player_volume_popup_, 41, 13, 110);
@@ -1339,7 +1311,7 @@ void PixelTouchUI::BuildPlayer() {
     playlist_panel_ = lv_obj_create(body_);
     lv_obj_set_pos(playlist_panel_, 10, 35);
     lv_obj_set_size(playlist_panel_, 300, 201);
-    StylePanel(playlist_panel_, 0x1b314b, 0x42647a, kRadius);
+    StylePanel(playlist_panel_, 0x1b314b, 0x42647a);
     lv_obj_set_style_radius(playlist_panel_, 12, 0);
     Label(playlist_panel_, "播放列表", 10, 4, 230, 25, kAccent);
     Button(playlist_panel_, "", 251, 1, 44, 29, OnPlaylistClose, this,
