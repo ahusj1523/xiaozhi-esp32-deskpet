@@ -14,6 +14,7 @@
 #include "application.h"
 #include "board.h"
 #include "audio_codec.h"
+#include "display.h"
 #include "http.h"
 
 #define TAG "MusicPlayer"
@@ -585,6 +586,9 @@ void MusicPlayer::Task() {
             const auto& c = candidates[i];
             ESP_LOGI(TAG, "Trying %d/%d: %s", (int)(i + 1), (int)candidates.size(),
                      c.title.c_str());
+            if (auto* display = board.GetDisplay()) {
+                display->ShowNotification("正在播放：" + c.title, 3000);
+            }
             if (DownloadAndPlay(c.url)) {
                 success = true;
                 title = c.title;
