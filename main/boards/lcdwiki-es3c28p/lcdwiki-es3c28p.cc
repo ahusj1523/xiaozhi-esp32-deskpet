@@ -21,12 +21,13 @@
 #include "display_mode_manager.h"
 #endif
 
+#include "music_player.h"
+
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
 #include <driver/usb_serial_jtag.h>
 #include <driver/usb_serial_jtag_vfs.h>
-#include <esp_console.h>
-#include <esp_lcd_panel_io.h>
+#include <esp_console.h>#include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_lcd_touch_ft5x06.h>
@@ -437,6 +438,58 @@ private:
             .argtable = nullptr
         };
         ESP_ERROR_CHECK(esp_console_cmd_register(&theme_cmd));
+
+        const esp_console_cmd_t music_play_cmd = {
+            .command = "music_play",
+            .help = "Play an online song: music_play <song name>",
+            .hint = nullptr,
+            .func = [](int argc, char** argv) -> int {
+                if (argc < 2) {
+                    printf("usage: music_play <song name>\r\n");
+                    return 1;
+                }
+                std::string name;
+                for (int i = 1; i < argc; ++i) {
+                    if (i > 1) name += " ";
+                    name += argv[i];
+                }
+                auto& player = MusicPlayer::GetInstance();
+                if (player.IsBusy()) player.Stop();
+                bool started = player.Play(name);
+                printf("music_play [%s] -> %s\r\n", name.c_str(),
+                       started ? "started" : "rejected (busy)");
+                return started ? 0 : 1;
+            },
+            .argtable = nullptr
+        };
+        ESP_ERROR_CHECK(esp_console_cmd_register(&music_play_cmd));
+
+        const esp_console_cmd_t music_status_cmd = {
+            .command = "music_status",
+            .help = "Show online music player state",
+            .hint = nullptr,
+            .func = [](int, char**) -> int {
+                auto& player = MusicPlayer::GetInstance();
+                printf("music busy=%d paused=%d\r\n", player.IsBusy() ? 1 : 0,
+                       player.IsPaused() ? 1 : 0);
+                return 0;
+            },
+            .argtable = nullptr
+        };
+        ESP_ERROR_CHECK(esp_console_cmd_register(&music_status_cmd));
+
+        const esp_console_cmd_t music_stop_cmd = {
+            .command = "music_stop",
+            .help = "Stop online music playback",
+            .hint = nullptr,
+            .func = [](int, char**) -> int {
+                MusicPlayer::GetInstance().Stop();
+                printf("music stop requested\r\n");
+                return 0;
+            },
+            .argtable = nullptr
+        };
+        ESP_ERROR_CHECK(esp_console_cmd_register(&music_stop_cmd));
 
         // The primary console is UART, so the built-in USB-Serial-JTAG REPL
         // helpers (guarded by CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG) are not
