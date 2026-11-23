@@ -30,8 +30,13 @@ public:
 
     // Non-blocking. Starts playback of the first search result for query.
     bool Play(const std::string& query);
+    // Pause/Resume keep the HTTP stream and decoded buffer intact, so playback
+    // continues exactly where it stopped. Stop ends the current track.
+    void Pause();
+    void Resume();
     void Stop();
     bool IsBusy() const { return busy_.load(); }
+    bool IsPaused() const { return paused_.load(); }
 
 private:
     MusicPlayer() = default;
@@ -62,6 +67,7 @@ private:
                                 int timeout_ms, const std::string& accept_header);
 
     std::atomic<bool> busy_{false};
+    std::atomic<bool> paused_{false};
     std::atomic<bool> cancelled_{false};
     std::mutex mutex_;
     std::string query_;
