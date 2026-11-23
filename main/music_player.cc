@@ -183,6 +183,7 @@ bool MusicPlayer::Play(const std::string& query) {
         query_ = query;
     }
     cancelled_.store(false);
+    paused_.store(false);
     busy_.store(true);
     // Large stack: MP3 decode + resample use sizeable scratch buffers. 8 KB
     // overflowed the stack and caused a Guru Meditation (BREAK instr) crash.
@@ -195,7 +196,22 @@ bool MusicPlayer::Play(const std::string& query) {
     return true;
 }
 
+void MusicPlayer::Pause() {
+    if (busy_.load() && !cancelled_.load()) {
+        paused_.store(true);
+        ESP_LOGI(TAG, "Music paused");
+    }
+}
+
+void MusicPlayer::Resume() {
+    if (busy_.load()) {
+        paused_.store(false);
+        ESP_LOGI(TAG, "Music resumed");
+    }
+}
+
 void MusicPlayer::Stop() {
+    paused_.store(false);
     cancelled_.store(true);
 }
 
@@ -352,6 +368,14 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
     int read_calls = 0;
 
     while (!cancelled_.load()) {
+        // Pause: stop feeding the decoder and the speaker, but keep the HTTP
+        // connection open and the undecoded bytes in `in_buf`. When resumed,
+        // playback continues from exactly where it was paused.
+        while (paused_.load() && !cancelled_.load()) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+        if (cancelled_.load()) break;
+
         // Append fresh bytes after whatever the parser left unconsumed.
         // ATTENTION: never overwrite unconsumed bytes (corrupts the stream).
         if (kInBufSize - buffered >= 512) {
@@ -381,7 +405,7 @@ bool MusicPlayer::DownloadAndPlay(const std::string& mp3_url) {
 
         int guard = 0;
         bool abort_track = false;
-        while (raw.len > 0 && guard++ < 256 && !cancelled_.load()) {
+        while (raw.len > 0 && guard++ < 256 && !cancelled_.load() && !paused_.load()) {
             uint8_t* frame_start = raw.buffer;  // where this decode attempt began
             esp_audio_dec_out_frame_t frame = {};
             frame.buffer = out_buf_vec.data();
