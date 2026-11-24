@@ -20,6 +20,11 @@
 
 #define TAG "LcdDisplay"
 
+// 板级可提供自定义表情图片集合（强符号覆盖）；默认无，退回字体图标。
+extern "C" __attribute__((weak)) std::shared_ptr<EmojiCollection> CreateBoardEmojiCollection() {
+    return nullptr;
+}
+
 LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
 LV_FONT_DECLARE(BUILTIN_ICON_FONT);
 LV_FONT_DECLARE(font_material_symbols_30_4);
@@ -66,6 +71,13 @@ void LcdDisplay::InitializeLcdThemes() {
     auto& theme_manager = LvglThemeManager::GetInstance();
     theme_manager.RegisterTheme("light", light_theme);
     theme_manager.RegisterTheme("dark", dark_theme);
+
+    // 板级表情图片集（若提供则优先用图片显示表情）
+    auto board_emoji = CreateBoardEmojiCollection();
+    if (board_emoji) {
+        light_theme->set_emoji_collection(board_emoji);
+        dark_theme->set_emoji_collection(board_emoji);
+    }
 }
 
 LcdDisplay::LcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel, int width,
