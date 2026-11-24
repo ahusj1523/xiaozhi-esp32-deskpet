@@ -28,7 +28,10 @@ dependencies:
   # Stay below the P4 rev>=3.0 CMake gate until rev-1.x boards are retired.
   espressif/esp_audio_effects: ~1.3.0
   espressif/esp_audio_codec: ~2.5.0
-  78/esp-ml307: ~3.8.1
+  78/esp-ml307:
+    version: ~3.8.1
+    rules:
+    - if: target not in [esp32, esp32s3]
   78/uart-uhci:
     version: ^0.4.1
     rules:
@@ -36,7 +39,7 @@ dependencies:
   78/uart-eth-modem:
     version: ~0.7.1
     rules:
-    - if: target not in [esp32]
+    - if: target not in [esp32, esp32s3]
   78/xiaozhi-fonts: ~2.0.0
   espressif/led_strip: ~3.0.3
   espressif/esp_codec_dev: ~1.6.2
@@ -163,7 +166,7 @@ dependencies:
 
   ## Required IDF version
   idf:
-    version: '>=6.0.1'
+    version: '>=5.5.0'
   kevincoooool/esp_lcd_st7102:
     version: ^1.0.4
     rules:

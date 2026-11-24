@@ -4,6 +4,7 @@ set(SOURCES "audio/audio_codec.cc"
             "audio/audio_service.cc"
             "audio/demuxer/ogg_demuxer.cc"
             "notify/notify_player.cc"
+            "music_player.cc"
             "audio/codecs/no_audio_codec.cc"
             "audio/codecs/box_audio_codec.cc"
             "audio/codecs/es8311_audio_codec.cc"
@@ -1269,6 +1270,7 @@ idf_component_register(SRCS ${SOURCES}
                         fatfs
                         esp_http_client
                         espressif__cjson
+                        espressif__esp_audio_codec
                         xiaozhi-fonts
                         ${MAIN_PRIV_REQUIRES_EXTRA}
                     )

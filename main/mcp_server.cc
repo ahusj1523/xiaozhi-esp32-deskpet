@@ -15,6 +15,7 @@
 #include "application.h"
 #include "board.h"
 #include "display.h"
+#include "music_player.h"
 #include "lvgl_image.h"
 #include "lvgl_theme.h"
 #include "settings.h"
@@ -59,6 +60,48 @@ void McpServer::AddCommonTools() {
             [&board](const PropertyList& properties) -> ReturnValue {
                 auto codec = board.GetAudioCodec();
                 codec->SetOutputVolume(properties["volume"].value<int>());
+                return true;
+            });
+
+    auto& music_player = MusicPlayer::GetInstance();
+    AddTool("self.music.play_song",
+            "Play a song online by name. Call this whenever the user wants to listen to a song "
+            "or an artist. The song is streamed from the internet and played through the speaker; "
+            "the assistant stops talking while it plays. Requires a working WiFi connection.\n"
+            "Args:\n"
+            "  `song_name`: song name, optionally including the singer, e.g. \"晴天 周杰伦\".",
+            PropertyList({Property("song_name", kPropertyTypeString)}),
+            [&music_player](const PropertyList& properties) -> ReturnValue {
+                std::string song = properties["song_name"].value<std::string>();
+                if (song.empty()) {
+                    return false;
+                }
+                // A new request replaces the current track: stop it and give the
+                // old playback task a moment to release the shared I2S path.
+                if (music_player.IsBusy()) {
+                    music_player.Stop();
+                    for (int i = 0; i < 40 && music_player.IsBusy(); ++i) {
+                        vTaskDelay(pdMS_TO_TICKS(50));
+                    }
+                }
+                return music_player.Play(song);
+            });
+
+    AddTool("self.music.stop", "Stop the online song that is currently playing.",
+            PropertyList(), [&music_player](const PropertyList& properties) -> ReturnValue {
+                music_player.Stop();
+                return true;
+            });
+
+    AddTool("self.music.pause", "Pause the online song that is currently playing.",
+            PropertyList(), [&music_player](const PropertyList& properties) -> ReturnValue {
+                music_player.Pause();
+                return true;
+            });
+
+    AddTool("self.music.resume", "Resume the paused online song.",
+            PropertyList(), [&music_player](const PropertyList& properties) -> ReturnValue {
+                music_player.Resume();
                 return true;
             });
 

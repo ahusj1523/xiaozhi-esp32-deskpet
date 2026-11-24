@@ -5,6 +5,7 @@
 #include "display/lcd_display.h"
 #include "led/single_led.h"
 #include "mcp_server.h"
+#include "music_player.h"
 #include "pixel_robot_display.h"
 #include "wifi_board.h"
 
@@ -19,6 +20,8 @@
 #include "almanac_service.h"
 #include "display_mode_manager.h"
 #endif
+
+#include "music_player.h"
 
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
@@ -197,6 +200,75 @@ private:
                                EnterWifiConfigMode();
                                return true;
                            });
+        // Online music: search a song by name and play it through the speaker.
+        // The device does the search + playback itself, no server music feature needed.
+        mcp_server.AddTool(
+            "self.music.play",
+            "Search and play a song online through the device speaker. "
+            "Use this whenever the user asks to play music, a song, or a singer, "
+            "for example \"播放晴天\", \"放一首周杰伦的歌\", \"我想听音乐\". "
+            "Pass the song name or singer name in the 'query' argument. "
+            "Only free songs can be played; VIP/paid songs may be unavailable.",
+            PropertyList({Property("query", kPropertyTypeString).SetMaxLength(64)}),
+            [](const PropertyList& properties) -> ToolResult {
+                auto query = properties["query"].value<std::string>();
+                if (query.empty()) {
+                    return std::unexpected("缺少歌曲名");
+                }
+                if (!MusicPlayer::GetInstance().Play(query)) {
+                    return std::unexpected("正在播放其它音乐，请稍后再试");
+                }
+                return std::string("正在为你播放：" + query);
+            });
+
+        // Pause / resume / stop the currently playing song. Without these the
+        // assistant has no way to honor "暂停音乐" / "继续播放" / "停止播放".
+        mcp_server.AddTool(
+            "self.music.pause",
+            "Pause the music currently playing through the device speaker. "
+            "Use this whenever the user says \"暂停音乐\", \"暂停播放\", \"停一下\", "
+            "\"先别放了\", \"pause the music\". No arguments needed.",
+            PropertyList(),
+            [](const PropertyList&) -> ToolResult {
+                auto& player = MusicPlayer::GetInstance();
+                if (!player.IsBusy()) {
+                    return std::unexpected("当前没有在播放音乐");
+                }
+                if (player.IsPaused()) {
+                    return std::string("音乐已经暂停了");
+                }
+                player.Pause();
+                return std::string("已暂停音乐，说继续播放可以接着听");
+            });
+
+        mcp_server.AddTool(
+            "self.music.resume",
+            "Resume the paused music. Use when the user says \"继续播放\", "
+            "\"接着放\", \"继续听\", \"resume the music\". No arguments needed.",
+            PropertyList(),
+            [](const PropertyList&) -> ToolResult {
+                auto& player = MusicPlayer::GetInstance();
+                if (!player.IsBusy() || !player.IsPaused()) {
+                    return std::unexpected("当前没有暂停的音乐");
+                }
+                player.Resume();
+                return std::string("继续播放音乐");
+            });
+
+        mcp_server.AddTool(
+            "self.music.stop",
+            "Stop the current music playback completely. Use when the user says "
+            "\"停止音乐\", \"别放了\", \"关掉音乐\", \"stop the music\". "
+            "No arguments needed.",
+            PropertyList(),
+            [](const PropertyList&) -> ToolResult {
+                auto& player = MusicPlayer::GetInstance();
+                if (!player.IsBusy()) {
+                    return std::unexpected("当前没有在播放音乐");
+                }
+                player.Stop();
+                return std::string("已停止音乐");
+            });
 #if CONFIG_WEATHER_DASHBOARD
         mcp_server.AddTool(
             "self.system.set_weather_api_key",
@@ -368,6 +440,58 @@ private:
         };
         ESP_ERROR_CHECK(esp_console_cmd_register(&theme_cmd));
 
+        const esp_console_cmd_t music_play_cmd = {
+            .command = "music_play",
+            .help = "Play an online song: music_play <song name>",
+            .hint = nullptr,
+            .func = [](int argc, char** argv) -> int {
+                if (argc < 2) {
+                    printf("usage: music_play <song name>\r\n");
+                    return 1;
+                }
+                std::string name;
+                for (int i = 1; i < argc; ++i) {
+                    if (i > 1) name += " ";
+                    name += argv[i];
+                }
+                auto& player = MusicPlayer::GetInstance();
+                if (player.IsBusy()) player.Stop();
+                bool started = player.Play(name);
+                printf("music_play [%s] -> %s\r\n", name.c_str(),
+                       started ? "started" : "rejected (busy)");
+                return started ? 0 : 1;
+            },
+            .argtable = nullptr
+        };
+        ESP_ERROR_CHECK(esp_console_cmd_register(&music_play_cmd));
+
+        const esp_console_cmd_t music_status_cmd = {
+            .command = "music_status",
+            .help = "Show online music player state",
+            .hint = nullptr,
+            .func = [](int, char**) -> int {
+                auto& player = MusicPlayer::GetInstance();
+                printf("music busy=%d paused=%d\r\n", player.IsBusy() ? 1 : 0,
+                       player.IsPaused() ? 1 : 0);
+                return 0;
+            },
+            .argtable = nullptr
+        };
+        ESP_ERROR_CHECK(esp_console_cmd_register(&music_status_cmd));
+
+        const esp_console_cmd_t music_stop_cmd = {
+            .command = "music_stop",
+            .help = "Stop online music playback",
+            .hint = nullptr,
+            .func = [](int, char**) -> int {
+                MusicPlayer::GetInstance().Stop();
+                printf("music stop requested\r\n");
+                return 0;
+            },
+            .argtable = nullptr
+        };
+        ESP_ERROR_CHECK(esp_console_cmd_register(&music_stop_cmd));
+
         // The primary console is UART, so the built-in USB-Serial-JTAG REPL
         // helpers (guarded by CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG) are not
         // available. Install the interrupt-driven driver, switch the
@@ -440,6 +564,14 @@ public:
         InitializeConsole();
 #endif
         GetBacklight()->RestoreBrightness();
+#if 0  // AUTO_PLAY_TEST: disabled for release (was temporary self-test)
+        xTaskCreate([](void*) {
+                vTaskDelay(pdMS_TO_TICKS(20000));  // let WiFi/MQTT settle
+                ESP_LOGI(TAG, "AUTO_PLAY_TEST: triggering Play(后来)");
+                MusicPlayer::GetInstance().Play("后来");
+                vTaskDelete(nullptr);
+            }, "auto_play", 4096, nullptr, 1, nullptr);
+#endif
     }
 
     virtual AudioCodec* GetAudioCodec() override {
