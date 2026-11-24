@@ -1062,8 +1062,10 @@ void LcdDisplay::SetupUI() {
     lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(chat_message_label_, lvgl_theme->text_color(), 0);
-    lv_obj_set_style_transform_scale_x(chat_message_label_, 384, 0);
-    lv_obj_set_style_transform_scale_y(chat_message_label_, 384, 0);
+    lv_obj_set_style_transform_pivot_x(chat_message_label_, lv_pct(50), 0);
+    lv_obj_set_style_transform_pivot_y(chat_message_label_, lv_pct(50), 0);
+    lv_obj_set_style_transform_scale_x(chat_message_label_, 307, 0);
+    lv_obj_set_style_transform_scale_y(chat_message_label_, 307, 0);
     lv_obj_align(chat_message_label_, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);  // Hide until there is content
 #else
@@ -1088,8 +1090,10 @@ void LcdDisplay::SetupUI() {
     lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(chat_message_label_, lvgl_theme->text_color(), 0);
-    lv_obj_set_style_transform_scale_x(chat_message_label_, 384, 0);
-    lv_obj_set_style_transform_scale_y(chat_message_label_, 384, 0);
+    lv_obj_set_style_transform_pivot_x(chat_message_label_, lv_pct(50), 0);
+    lv_obj_set_style_transform_pivot_y(chat_message_label_, lv_pct(50), 0);
+    lv_obj_set_style_transform_scale_x(chat_message_label_, 307, 0);
+    lv_obj_set_style_transform_scale_y(chat_message_label_, 307, 0);
     lv_obj_align(chat_message_label_, LV_ALIGN_CENTER, 0, 0);
 
     // Start scrolling after a delay (short text won't scroll)
@@ -1227,10 +1231,19 @@ bool LcdDisplay::SetEmotion(const char* emotion) {
         return false;
     }
 
-    auto emoji_collection = static_cast<LvglTheme*>(current_theme_)->emoji_collection();
+    auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
+    // 强制使用板级图片集合，覆盖 assets 里默认的 noto 表情集合
+    auto board_emoji = CreateBoardEmojiCollection();
+    if (board_emoji != nullptr) {
+        lvgl_theme->set_emoji_collection(board_emoji);
+    }
+    auto emoji_collection = lvgl_theme->emoji_collection();
     auto image = emoji_collection != nullptr ? emoji_collection->GetEmojiImage(emotion) : nullptr;
+    ESP_LOGI(TAG, "SetEmotion '%s': collection=%p image=%p", emotion,
+             (void*)emoji_collection.get(), (void*)image);
     if (image == nullptr) {
-        auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
+        ESP_LOGW(TAG, "no board emoji image for '%s', falling back to font glyph", emotion);
+    }
         const char* utf8 = noto_emoji_get_utf8(emotion);
         const lv_font_t* emotion_font = lvgl_theme->emoji_font()->font();
         if (utf8 == nullptr) {
