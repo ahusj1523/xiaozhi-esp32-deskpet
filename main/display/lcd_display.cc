@@ -1243,7 +1243,6 @@ bool LcdDisplay::SetEmotion(const char* emotion) {
              (void*)emoji_collection.get(), (void*)image);
     if (image == nullptr) {
         ESP_LOGW(TAG, "no board emoji image for '%s', falling back to font glyph", emotion);
-    }
         const char* utf8 = noto_emoji_get_utf8(emotion);
         const lv_font_t* emotion_font = lvgl_theme->emoji_font()->font();
         if (utf8 == nullptr) {
