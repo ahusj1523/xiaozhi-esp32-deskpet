@@ -1,0 +1,34 @@
+name: Build Single Board
+on:
+  workflow_dispatch:
+    inputs:
+      board:
+        description: board directory name under main/boards
+        required: true
+      variant:
+        description: variant name (defaults to board name)
+        required: false
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:release-v6.1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Build current variant
+        shell: bash
+        run: |
+          source "$IDF_PATH/export.sh"
+          BOARD="${{ github.event.inputs.board }}"
+          VARIANT="${{ github.event.inputs.variant }}"
+          if [ -z "$VARIANT" ]; then VARIANT="$BOARD"; fi
+          python scripts/build.py "$BOARD" --name "$VARIANT"
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: xiaozhi_${{ github.event.inputs.board }}_${{ github.sha }}
+          path: build/merged-binary.bin
+          if-no-files-found: error
