@@ -1045,7 +1045,7 @@ void LcdDisplay::SetupUI() {
     /* Bottom bar - subtitle right under the emoji */
     bottom_bar_ = lv_obj_create(screen);
     lv_obj_set_width(bottom_bar_, LV_HOR_RES);
-    lv_obj_set_height(bottom_bar_, LV_SIZE_CONTENT);
+    lv_obj_set_height(bottom_bar_, LV_VER_RES - SUBTITLE_TOP_Y);
     lv_obj_set_style_radius(bottom_bar_, 0, 0);
     lv_obj_set_style_bg_color(bottom_bar_, lvgl_theme->background_color(), 0);
     lv_obj_set_style_bg_opa(bottom_bar_, LV_OPA_50, 0);
@@ -1055,13 +1055,15 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_scrollbar_mode(bottom_bar_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_align(bottom_bar_, LV_ALIGN_TOP_MID, 0, SUBTITLE_TOP_Y);
 
-    /* chat_message_label_ placed in bottom_bar_, multiline wrapped display */
+    /* chat_message_label_ placed in bottom_bar_, multiline wrapped display, scaled 1.5x */
     chat_message_label_ = lv_label_create(bottom_bar_);
     lv_label_set_text(chat_message_label_, "");
-    lv_obj_set_width(chat_message_label_, LV_HOR_RES - lvgl_theme->spacing(8));
+    lv_obj_set_width(chat_message_label_, (LV_HOR_RES - lvgl_theme->spacing(8)) * 2 / 3);
     lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(chat_message_label_, lvgl_theme->text_color(), 0);
+    lv_obj_set_style_transform_scale_x(chat_message_label_, 384, 0);
+    lv_obj_set_style_transform_scale_y(chat_message_label_, 384, 0);
     lv_obj_align(chat_message_label_, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);  // Hide until there is content
 #else
@@ -1079,13 +1081,15 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_scrollbar_mode(bottom_bar_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_align(bottom_bar_, LV_ALIGN_TOP_MID, 0, SUBTITLE_TOP_Y);
 
-    /* chat_message_label_ placed in bottom_bar_, single-line horizontal scroll */
+    /* chat_message_label_ placed in bottom_bar_, wrapped display, scaled 1.5x */
     chat_message_label_ = lv_label_create(bottom_bar_);
     lv_label_set_text(chat_message_label_, "");
-    lv_obj_set_width(chat_message_label_, LV_HOR_RES - lvgl_theme->spacing(8));
+    lv_obj_set_width(chat_message_label_, (LV_HOR_RES - lvgl_theme->spacing(8)) * 2 / 3);
     lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(chat_message_label_, lvgl_theme->text_color(), 0);
+    lv_obj_set_style_transform_scale_x(chat_message_label_, 384, 0);
+    lv_obj_set_style_transform_scale_y(chat_message_label_, 384, 0);
     lv_obj_align(chat_message_label_, LV_ALIGN_CENTER, 0, 0);
 
     // Start scrolling after a delay (short text won't scroll)
