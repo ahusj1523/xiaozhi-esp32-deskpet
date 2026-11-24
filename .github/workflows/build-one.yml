@@ -25,7 +25,7 @@ jobs:
           BOARD="${{ github.event.inputs.board }}"
           VARIANT="${{ github.event.inputs.variant }}"
           if [ -z "$VARIANT" ]; then VARIANT="$BOARD"; fi
-          python scripts/build.py "$BOARD" --name "$VARIANT"
+          python scripts/build.py "$BOARD" --name "$VARIANT" --language zh-CN
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
