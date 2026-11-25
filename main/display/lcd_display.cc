@@ -38,15 +38,15 @@ void LcdDisplay::InitializeLcdThemes() {
 
     // light theme
     auto light_theme = new LvglTheme("light");
-    light_theme->set_background_color(lv_color_hex(0xFFFFFF));
-    light_theme->set_text_color(lv_color_hex(0x000000));
-    light_theme->set_chat_background_color(lv_color_hex(0xE0E0E0));
+    light_theme->set_background_color(lv_color_hex(0x000000));
+    light_theme->set_text_color(lv_color_hex(0xFFFFFF));
+    light_theme->set_chat_background_color(lv_color_hex(0x1F1F1F));
     light_theme->set_user_bubble_color(lv_color_hex(0x00FF00));
-    light_theme->set_assistant_bubble_color(lv_color_hex(0xDDDDDD));
-    light_theme->set_system_bubble_color(lv_color_hex(0xFFFFFF));
-    light_theme->set_system_text_color(lv_color_hex(0x000000));
-    light_theme->set_border_color(lv_color_hex(0x000000));
-    light_theme->set_low_battery_color(lv_color_hex(0x000000));
+    light_theme->set_assistant_bubble_color(lv_color_hex(0x222222));
+    light_theme->set_system_bubble_color(lv_color_hex(0x000000));
+    light_theme->set_system_text_color(lv_color_hex(0xFFFFFF));
+    light_theme->set_border_color(lv_color_hex(0xFFFFFF));
+    light_theme->set_low_battery_color(lv_color_hex(0xFF0000));
     light_theme->set_text_font(text_font);
     light_theme->set_icon_font(icon_font);
     light_theme->set_large_icon_font(large_icon_font);
@@ -91,7 +91,7 @@ LcdDisplay::LcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_
 
     // Load theme from settings
     Settings settings("display", false);
-    std::string theme_name = settings.GetString("theme", "light");
+    std::string theme_name = settings.GetString("theme", "dark");
     current_theme_ = LvglThemeManager::GetInstance().GetTheme(theme_name);
 
     // Create a timer to hide the preview image
