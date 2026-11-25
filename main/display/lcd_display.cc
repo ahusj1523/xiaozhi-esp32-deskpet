@@ -950,7 +950,9 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_bg_opa(emoji_box_, LV_OPA_TRANSP, 0);
     lv_obj_set_style_pad_all(emoji_box_, 0, 0);
     lv_obj_set_style_border_width(emoji_box_, 0, 0);
-    lv_obj_align(emoji_box_, LV_ALIGN_CENTER, 0, 0);
+    // 表情整体上移，为放大后的表情腾出空间，避免压到下方字幕
+    lv_obj_align(emoji_box_, LV_ALIGN_CENTER, 0, -60);
+    lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
 
     emoji_label_ = lv_label_create(emoji_box_);
     lv_obj_set_style_text_font(emoji_label_, large_icon_font, 0);
@@ -959,6 +961,11 @@ void LcdDisplay::SetupUI() {
 
     emoji_image_ = lv_img_create(emoji_box_);
     lv_obj_center(emoji_image_);
+    // 表情放大 2 倍（256 = 1x），以图片中心为缩放基点
+    lv_obj_set_style_transform_pivot_x(emoji_image_, lv_pct(50), 0);
+    lv_obj_set_style_transform_pivot_y(emoji_image_, lv_pct(50), 0);
+    lv_obj_set_style_transform_scale_x(emoji_image_, 512, 0);
+    lv_obj_set_style_transform_scale_y(emoji_image_, 512, 0);
     lv_obj_add_flag(emoji_image_, LV_OBJ_FLAG_HIDDEN);
 
     /* Middle layer: preview_image_ - centered display */
