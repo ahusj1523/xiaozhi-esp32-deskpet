@@ -961,11 +961,11 @@ void LcdDisplay::SetupUI() {
 
     emoji_image_ = lv_img_create(emoji_box_);
     lv_obj_center(emoji_image_);
-    // 表情放大 2 倍（256 = 1x），以图片中心为缩放基点
+    // 表情图本身已按 152x152 生成，这里保持 1 倍显示（256 = 1x）
     lv_obj_set_style_transform_pivot_x(emoji_image_, lv_pct(50), 0);
     lv_obj_set_style_transform_pivot_y(emoji_image_, lv_pct(50), 0);
-    lv_obj_set_style_transform_scale_x(emoji_image_, 512, 0);
-    lv_obj_set_style_transform_scale_y(emoji_image_, 512, 0);
+    lv_obj_set_style_transform_scale_x(emoji_image_, 256, 0);
+    lv_obj_set_style_transform_scale_y(emoji_image_, 256, 0);
     lv_obj_add_flag(emoji_image_, LV_OBJ_FLAG_HIDDEN);
 
     /* Middle layer: preview_image_ - centered display */
