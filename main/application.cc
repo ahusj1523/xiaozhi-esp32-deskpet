@@ -713,6 +713,14 @@ void Application::InitializeProtocol() {
                     display->SetEmotion(emotion_str.c_str());
                 });
             }
+        } else if (strcmp(type->valuestring, "lyric") == 0) {
+            auto text = cJSON_GetObjectItem(root, "text");
+            if (cJSON_IsString(text)) {
+                ESP_LOGI(TAG, "[lyric] %s", text->valuestring);
+                Schedule([display, message = std::string(text->valuestring)]() {
+                    display->SetChatMessage("assistant", message.c_str());
+                });
+            }
         } else if (strcmp(type->valuestring, "mcp") == 0) {
             auto payload = cJSON_GetObjectItem(root, "payload");
             if (cJSON_IsObject(payload)) {
