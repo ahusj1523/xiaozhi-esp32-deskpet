@@ -20,6 +20,7 @@
 #include "application.h"
 #include "board.h"
 #include "display.h"
+#include "audio/http_music_player.h"
 #include "lvgl_image.h"
 #include "lvgl_theme.h"
 #include "settings.h"
@@ -129,6 +130,36 @@ void McpServer::AddCommonTools() {
                 });
     }
 #endif
+
+    // 设备端音乐播放：给一个 ogg/opus 音频直链就能播（走本地解码，不占云端音频通道）
+    AddTool("self.music.play_url",
+            "Play an online song on this device. Argument `url` is the direct audio URL (ogg/opus, "
+            "ends with .ogg) returned by the cloud music tool `play_song`.\n"
+            "Use this tool whenever the user asks to play / listen to a specific song: first call "
+            "the music tool to obtain the url, then call this tool with that exact url. "
+            "The audio is downloaded and decoded on the device, so it does not interrupt the "
+            "conversation channel.",
+            PropertyList({Property("url", kPropertyTypeString)}),
+            [](const PropertyList& properties) -> ReturnValue {
+                auto url = properties["url"].value<std::string>();
+                if (!HttpMusicPlayer::GetInstance().PlayUrl(url)) {
+                    return std::string("播放失败：音频地址无效或任务启动失败");
+                }
+                return std::string("已开始播放");
+            });
+
+    AddTool("self.music.stop",
+            "Stop the song that is currently playing on this device.",
+            PropertyList(), [](const PropertyList& properties) -> ReturnValue {
+                HttpMusicPlayer::GetInstance().Stop();
+                return std::string("已停止播放");
+            });
+
+    AddTool("self.music.status",
+            "Check whether a song is currently playing on this device.",
+            PropertyList(), [](const PropertyList& properties) -> ReturnValue {
+                return HttpMusicPlayer::GetInstance().IsPlaying();
+            });
 
     // Restore the original tools list to the end of the tools list
     tools_.insert(tools_.end(), std::make_move_iterator(original_tools.begin()),
