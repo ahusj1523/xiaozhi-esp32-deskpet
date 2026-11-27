@@ -21,6 +21,7 @@
 #include "board.h"
 #include "display.h"
 #include "audio/http_music_player.h"
+#include "audio/mp3_music_player.h"
 #include "lvgl_image.h"
 #include "lvgl_theme.h"
 #include "settings.h"
@@ -142,8 +143,18 @@ void McpServer::AddCommonTools() {
             PropertyList({Property("url", kPropertyTypeString)}),
             [](const PropertyList& properties) -> ReturnValue {
                 auto url = properties["url"].value<std::string>();
-                if (!HttpMusicPlayer::GetInstance().PlayUrl(url)) {
-                    return std::string("播放失败：音频地址无效或任务启动失败");
+                // .ogg/.opus 走 opus 解码队列；mp3 直链由设备自己解码，不需要电脑
+                bool is_ogg = url.size() > 4 && (url.compare(url.size() - 4, 4, ".ogg") == 0 ||
+                                                 url.find(".ogg?") != std::string::npos);
+                if (is_ogg) {
+                    if (!HttpMusicPlayer::GetInstance().PlayUrl(url)) {
+                        return std::string("播放失败：音频地址无效或任务启动失败");
+                    }
+                } else {
+                    Mp3MusicPlayer::GetInstance().Stop();
+                    if (!Mp3MusicPlayer::GetInstance().PlayUrl(url)) {
+                        return std::string("播放失败：音频地址无效或任务启动失败");
+                    }
                 }
                 return std::string("已开始播放");
             });
@@ -152,13 +163,15 @@ void McpServer::AddCommonTools() {
             "Stop the song that is currently playing on this device.",
             PropertyList(), [](const PropertyList& properties) -> ReturnValue {
                 HttpMusicPlayer::GetInstance().Stop();
+                Mp3MusicPlayer::GetInstance().Stop();
                 return std::string("已停止播放");
             });
 
     AddTool("self.music.status",
             "Check whether a song is currently playing on this device.",
             PropertyList(), [](const PropertyList& properties) -> ReturnValue {
-                return HttpMusicPlayer::GetInstance().IsPlaying();
+                return HttpMusicPlayer::GetInstance().IsPlaying() ||
+                       Mp3MusicPlayer::GetInstance().IsPlaying();
             });
 
     // Restore the original tools list to the end of the tools list
