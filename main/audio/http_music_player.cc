@@ -15,7 +15,7 @@
 
 #define TAG "HttpMusic"
 #define READ_CHUNK_SIZE 4096
-#define MUSIC_TASK_STACK 12288
+#define MUSIC_TASK_STACK 16384
 
 HttpMusicPlayer& HttpMusicPlayer::GetInstance() {
     static HttpMusicPlayer instance;
@@ -93,7 +93,9 @@ void HttpMusicPlayer::Run(std::string url) {
         ESP_LOGI(TAG, "HTTP 已连接, content_length=%d, status=%d", content_length,
                  esp_http_client_get_status_code(client));
 
-        OggDemuxer demuxer;
+        // OggDemuxer 内部有 ~2.5KB 缓冲，放堆上，避免栈帧超限
+        auto demuxer_holder = std::make_unique<OggDemuxer>();
+        OggDemuxer& demuxer = *demuxer_holder;
         demuxer.OnPacket([&audio](const uint8_t* data, int sample_rate, int frame_duration_ms,
                                   size_t len) {
             if (len == 0) {
