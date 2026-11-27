@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <esp_err.h>
+#include <esp_crt_bundle.h>
 #include <esp_http_client.h>
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
@@ -17,7 +18,7 @@
 #include "minimp3/minimp3.h"
 
 #define TAG "Mp3Music"
-#define MP3_TASK_STACK 16384
+#define MP3_TASK_STACK 32768
 #define MP3_BUF_SIZE (32 * 1024)
 
 Mp3MusicPlayer& Mp3MusicPlayer::GetInstance() {
@@ -80,6 +81,7 @@ void Mp3MusicPlayer::Run(std::string url) {
     config.buffer_size = 4096;
     config.keep_alive_enable = false;
     config.user_agent = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36";
+    config.crt_bundle_attach = esp_crt_bundle_attach;
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == nullptr) {
@@ -147,7 +149,7 @@ void Mp3MusicPlayer::Run(std::string url) {
                 pos = 0;
             }
             if (!eof && remaining < MP3_BUF_SIZE) {
-                int r = esp_http_client_read(client, buf.get() + remaining,
+                int r = esp_http_client_read(client, reinterpret_cast<char*>(buf.get() + remaining),
                                              static_cast<int>(MP3_BUF_SIZE - remaining));
                 if (r <= 0) {
                     eof = true;

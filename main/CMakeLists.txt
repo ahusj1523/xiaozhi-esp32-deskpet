@@ -1,4 +1,5 @@
 # Define source files
+set_source_files_properties("audio/minimp3/minimp3_impl.c" PROPERTIES COMPILE_OPTIONS "-Wno-frame-larger-than")
 set(SOURCES "audio/audio_codec.cc"
             "audio/audio_debugger.cc"
             "audio/audio_service.cc"
