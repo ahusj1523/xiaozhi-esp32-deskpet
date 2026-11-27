@@ -7,6 +7,7 @@
 #include <esp_lcd_ili9341.h>
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -248,6 +249,14 @@ public:
         discharging = battery_monitor_->IsDischarging();
         level = battery_monitor_->GetBatteryLevel();
         return true;
+    }
+
+    // 本板不做 WiFi 省电：modem sleep 会把局域网延迟拉到 1 秒并丢包，
+    // 直接导致云端会话握手/音频流超时（屏幕报"等待响应超时"）。
+    virtual void SetPowerSaveLevel(PowerSaveLevel level) override {
+        (void)level;
+        WifiBoard::SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+        esp_wifi_set_ps(WIFI_PS_NONE);
     }
 };
 
